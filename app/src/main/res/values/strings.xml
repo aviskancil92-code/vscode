@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VS Code Mobile</string>
+    <string name="tagline">Debian + code-server di Android — tanpa root</string>
+
+    <!-- Setup -->
+    <string name="setup_description">Aplikasi ini menjalankan sistem Debian GNU/Linux lengkap bersama code-server (VS Code di peramban) di latar belakang perangkat Anda, lalu menampilkannya langsung di dalam aplikasi.\n\nSemua komponen diunduh saat instalasi pertama: APK tetap kecil, sistem lengkap terpasang di penyimpanan aplikasi.</string>
+    <string name="download_plan_title">Rencana unduhan (sekali saja)</string>
+    <string name="download_plan">• proot + library     ±0,4 MB\n• rootfs Debian 12    ±90 MB\n• code-server + Node  ±215 MB\n\nTotal ruang terpasang: ±1 GB</string>
+    <string name="storage_free_fmt">Ruang bebas: %1$s</string>
+    <string name="install_now">Pasang sekarang</string>
+    <string name="retry">Coba lagi</string>
+    <string name="setup_manual_hint">Kuota terbatas? Unduh berkas di perangkat lain lalu gunakan menu ⋮ → Pengaturan → Impor.</string>
+    <string name="preparing_install">Memulai instalasi…</string>
+
+    <!-- Instalasi -->
+    <string name="install_done">Instalasi selesai — memulai server…</string>
+    <string name="install_failed_fmt">Instalasi gagal:\n%1$s</string>
+    <string name="cancel">Batalkan</string>
+    <string name="low_disk_title">Ruang penyimpanan rendah</string>
+    <string name="low_disk_msg_fmt">Instalasi membutuhkan ±1,2 GB ruang bebas. Tersedia saat ini: %1$s. Lanjutkan saja?</string>
+    <string name="continue_anyway">Lanjutkan saja</string>
+    <string name="manual_install_title">Pasang dari berkas?</string>
+    <string name="manual_install_msg">Debian akan dipasang ulang dari awal memakai berkas pilihan Anda (rootfs atau tarball code-server). Data di folder /sdcard tidak terpengaruh, tetapi isi ruang kerja lama akan hilang. Lanjutkan?</string>
+
+    <!-- Loading / status -->
+    <string name="status_starting">Menyiapkan Linux &amp; code-server…</string>
+    <string name="status_restarting_fmt">Server mati — memulai ulang (percobaan %1$d)…</string>
+    <string name="status_error_fmt">Kesalahan: %1$s</string>
+    <string name="status_stopped">Server dihentikan.</string>
+    <string name="loading_hint">Persiapan pertama bisa memakan waktu ±1 menit.</string>
+    <string name="action_start">Mulai server</string>
+    <string name="action_retry_start">Coba mulai ulang</string>
+
+    <!-- Menu -->
+    <string name="menu_restart">Mulai ulang server</string>
+    <string name="menu_stop">Hentikan server</string>
+    <string name="settings">Pengaturan</string>
+    <string name="logs">Lihat log</string>
+    <string name="about">Tentang</string>
+    <string name="restarting_server">Memulai ulang server…</string>
+
+    <!-- Pengaturan -->
+    <string name="setting_auth">Autentikasi kata sandi</string>
+    <string name="setting_auth_desc">Minta kata sandi saat membuka VS Code (server hanya bisa diakses dari perangkat ini: 127.0.0.1).</string>
+    <string name="password_fmt">Kata sandi: %1$s (kopi sekarang, ditampilkan sekali)</string>
+    <string name="setting_keep_on">Layar selalu aktif</string>
+    <string name="advanced">Lanjutan</string>
+    <string name="import_rootfs">Impor rootfs Debian dari berkas…</string>
+    <string name="import_code_server">Impor code-server dari berkas…</string>
+    <string name="wipe">Hapus data Linux (±1 GB)…</string>
+    <string name="versions_fmt">code-server %1$s\nrootfs %2$s\nproot %3$s</string>
+    <string name="applied_after_restart">Berlaku setelah server dimulai ulang…</string>
+    <string name="wipe_title">Hapus seluruh data Linux?</string>
+    <string name="wipe_msg">Rootfs Debian, code-server, ekstensi, dan pengaturan akan dihapus. Aplikasi kembali ke kondisi awal. Berkas di penyimpanan bersama (/sdcard) tidak terpengaruh.</string>
+    <string name="wipe_yes">Hapus</string>
+
+    <!-- Lain-lain -->
+    <string name="no_logs">Belum ada log.</string>
+    <string name="downloading_fmt">Mengunduh %1$s…</string>
+    <string name="saved_fmt">Tersimpan: %1$s</string>
+    <string name="download_failed_fmt">Unduhan gagal: %1$s</string>
+    <string name="about_msg_fmt">VS Code Mobile — pembungkus Android untuk code-server.\n\n• code-server %1$s (coder/code-server, MIT)\n• Debian %2$s rootfs (linuxcontainers.org)\n• proot %3$s (Termux)\n\nMenjalankan VS Code lengkap — termasuk terminal Debian, ekstensi, dan Git — tanpa root.</string>
+    <string name="menu_storage">Izin penyimpanan</string>
+    <string name="hint_three_finger">Layar penuh aktif. Ketuk 3 jari untuk menampilkan/menyembunyikan header.</string>
+    <string name="popup_close">Tutup</string>
+    <string name="popup_browser">Browser</string>
+    <string name="storage_title">Akses penyimpanan</string>
+    <string name="storage_rationale">Izinkan akses penyimpanan agar VS Code bisa membuka dan menyimpan berkas di /sdcard (mis. Download/*.vsix).</string>
+    <string name="storage_allow">Izinkan</string>
+    <string name="storage_denied">Izin penyimpanan ditolak. Buka menu ⋮ → Izin penyimpanan untuk mencoba lagi.</string>
+    <string name="storage_granted">Izin diberikan. Server dimulai ulang agar /sdcard terbaca.</string>
+    <string name="storage_already">Akses penyimpanan sudah aktif.</string>
+</resources>
