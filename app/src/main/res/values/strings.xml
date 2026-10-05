@@ -71,4 +71,13 @@
     <string name="storage_denied">Izin penyimpanan ditolak. Buka menu ⋮ → Izin penyimpanan untuk mencoba lagi.</string>
     <string name="storage_granted">Izin diberikan. Server dimulai ulang agar /sdcard terbaca.</string>
     <string name="storage_already">Akses penyimpanan sudah aktif.</string>
+    <string name="menu_shortcuts">Pintasan keyboard</string>
+    <string name="menu_keybar">Bar tombol ekstra</string>
+    <string name="shortcuts_title">Pintasan keyboard — ketuk untuk mengirim ke editor</string>
+    <string name="menu_volkeys">Tombol volume</string>
+    <string name="volkeys_title">Fungsi tombol volume</string>
+    <string name="volkeys_opt0">Ala Termux: Vol-Bawah = Ctrl, Vol-Atas = Fn</string>
+    <string name="volkeys_opt1">Vol-Bawah = Ctrl, Vol-Atas = Shift</string>
+    <string name="volkeys_opt2">Mati (volume seperti biasa)</string>
+    <string name="volume_help">Tombol volume (menu ⋮ → Tombol volume): tahan Vol-Bawah lalu ketik huruf = Ctrl+huruf (atau ketuk sekali, lalu ketik). Mode Termux: tahan/ketuk Vol-Atas lalu W A S D = panah, E = Esc, T = Tab, P/N = PgUp/PgDn, I/O = Home/End, X = Delete, H = ~, U = _, L = |, 1–9/0 = F1–F10, . = Ctrl+\\, Q = bar tombol. Shift &amp; Alt: ketuk tombolnya di bar (ketuk lama = kunci).</string>
 </resources>

@@ -14,6 +14,7 @@ import android.text.method.ScrollingMovementMethod
 import android.util.Log
 import android.view.Menu
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
@@ -107,6 +108,10 @@ class MainActivity : AppCompatActivity() {
     private var popupWeb: WebView? = null
     private var popupVisitedExternal = false
 
+    // Tombol & pintasan keyboard.
+    private lateinit var keyPad: KeyPad
+    private var shortcutPanel: View? = null
+
     private val storagePerms = arrayOf(
         Manifest.permission.READ_EXTERNAL_STORAGE,
         Manifest.permission.WRITE_EXTERNAL_STORAGE
@@ -133,6 +138,12 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        keyPad = KeyPad(this, { popupWeb ?: webView }, { toggleShortcutPanel() }, { toggleKeyBar() })
+        keyPad.volMode = getSharedPreferences("ui", MODE_PRIVATE).getInt("volmode", 0)
+        keyPad.buildBar(binding.keysRow)
+        binding.keysBar.visibility =
+            if (getSharedPreferences("ui", MODE_PRIVATE).getBoolean("keybar", false)) View.VISIBLE else View.GONE
+
         binding.textStorage.text = getString(
             R.string.storage_free_fmt,
             fmtSize(StatFs(filesDir.path).availableBytes)
@@ -154,6 +165,7 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (shortcutPanel != null) { hideShortcutPanel(); return }
                 val pw = popupWeb
                 if (pw != null) {
                     if (pw.canGoBack()) pw.goBack() else closePopup()
@@ -191,7 +203,7 @@ class MainActivity : AppCompatActivity() {
             if (mode == Mode.Installing) View.VISIBLE else View.GONE
         binding.loadingContainer.visibility =
             if (mode == Mode.Loading) View.VISIBLE else View.GONE
-        binding.webContainer.visibility =
+        binding.webArea.visibility =
             if (mode == Mode.Web) View.VISIBLE else View.GONE
         binding.buttonRetry.visibility =
             if (mode == Mode.SetupFailed) View.VISIBLE else View.GONE
@@ -399,7 +411,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun createWebView(): WebView {
         destroyWebView()
-        val wv = WebView(this)
+        val wv = CodeWebView(this).also { it.keyPad = keyPad }
         wv.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
@@ -552,6 +564,64 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    // ------------------------------------------------------ pintasan keyboard
+
+    private fun toggleShortcutPanel() {
+        if (shortcutPanel != null) { hideShortcutPanel(); return }
+        val panel = keyPad.buildPanel { hideShortcutPanel() }
+        val h = (resources.displayMetrics.heightPixels * 0.45f).toInt()
+        binding.webContainer.addView(
+            panel,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h, Gravity.BOTTOM)
+        )
+        shortcutPanel = panel
+    }
+
+    private fun hideShortcutPanel() {
+        val p = shortcutPanel ?: return
+        shortcutPanel = null
+        runCatching { (p.parent as? ViewGroup)?.removeView(p) }
+    }
+
+    private fun showVolumeKeysDialog() {
+        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        val items = arrayOf(
+            getString(R.string.volkeys_opt0), getString(R.string.volkeys_opt1), getString(R.string.volkeys_opt2)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(R.string.volkeys_title)
+            .setSingleChoiceItems(items, prefs.getInt("volmode", 0)) { d, which ->
+                prefs.edit().putInt("volmode", which).apply()
+                keyPad.volMode = which
+                keyPad.refreshMods()
+                d.dismiss()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val c = event.keyCode
+        if ((c == KeyEvent.KEYCODE_VOLUME_DOWN || c == KeyEvent.KEYCODE_VOLUME_UP) &&
+            mode == Mode.Web && ::keyPad.isInitialized &&
+            keyPad.onVolume(c, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
+        ) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun toggleKeyBar() {
+        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        val on = !prefs.getBoolean("keybar", false)
+        prefs.edit().putBoolean("keybar", on).apply()
+        binding.keysBar.visibility = if (on) View.VISIBLE else View.GONE
+    }
+
+    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
+        menu.findItem(R.id.action_keybar)?.isChecked =
+            getSharedPreferences("ui", MODE_PRIVATE).getBoolean("keybar", false)
+        return super.onPrepareOptionsMenu(menu)
+    }
 
     // -------------------------------------------------------- popup / login OAuth
 
@@ -768,6 +838,18 @@ class MainActivity : AppCompatActivity() {
             }
             R.id.action_stop -> {
                 LinuxService.requestStop(this)
+                true
+            }
+            R.id.action_shortcuts -> {
+                toggleShortcutPanel()
+                true
+            }
+            R.id.action_volkeys -> {
+                showVolumeKeysDialog()
+                true
+            }
+            R.id.action_keybar -> {
+                toggleKeyBar()
                 true
             }
             R.id.action_storage -> {

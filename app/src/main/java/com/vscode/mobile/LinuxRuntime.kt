@@ -22,6 +22,8 @@ object LinuxRuntime {
     fun libDir(ctx: Context): File = File(StateStore.linuxDir(ctx), "lib")
     fun tmpDir(ctx: Context): File = File(StateStore.linuxDir(ctx), "tmp")
     fun logsDir(ctx: Context): File = File(StateStore.linuxDir(ctx), "logs")
+    fun shmDir(ctx: Context): File = File(StateStore.linuxDir(ctx), "shm")
+    fun fakeProcDir(ctx: Context): File = File(StateStore.linuxDir(ctx), "fakeproc")
 
     fun isInstalled(ctx: Context): Boolean {
         val st = StateStore.read(ctx)
@@ -51,6 +53,11 @@ object LinuxRuntime {
             prootBin(ctx).path,
             "-r", rootfsDir(ctx).path,
             "-0",
+            // Android melarang hard link (link() -> EACCES) di penyimpanan aplikasi.
+            // dpkg membuat var/lib/dpkg/status-old lewat link() => "error creating new backup
+            // file ... Permission denied". --link2symlink meniru hard link dengan symlink.
+            "--link2symlink",
+            "--kill-on-exit", // jangan tinggalkan proses yatim (port 8080 tetap terpakai)
             "-w", "/root",
             "-b", "/dev",
             "-b", "/proc",
@@ -58,6 +65,13 @@ object LinuxRuntime {
             "-b", "/proc/self/fd:/dev/fd",
             "-b", "/dev/urandom:/dev/random"
         )
+        // /dev/shm (dibutuhkan Python multiprocessing, Chromium, dll.; tidak ada di Android).
+        val shm = shmDir(ctx)
+        shm.mkdirs()
+        try { android.system.Os.chmod(shm.path, 0x3FF) } catch (_: Exception) { }
+        cmd += listOf("-b", "${shm.path}:/dev/shm")
+        // Berkas /proc yang diblokir Android (stat, loadavg, ...) diganti versi palsu.
+        for ((guest, host) in fakeProcBinds(ctx)) cmd += listOf("-b", "${host.path}:$guest")
         // Ikat penyimpanan bersama bila dapat dibaca (opsional, tanpa crash bila tidak).
         // Cukup exists(): canRead() bernilai false sebelum izin diberikan sehingga bind
         // terlewat selamanya. Bind direktori yang belum bisa dibaca aman bagi proot.
@@ -137,6 +151,9 @@ object LinuxRuntime {
                 "unset PROOT_NO_SECCOMP",
                 "unset TMPDIR",
                 "export HOME=/root",
+                "export USER=root",
+                "export LOGNAME=root",
+                "export SHELL=/bin/bash", // terminal terintegrasi memakai $SHELL
                 "export LANG=C.UTF-8",
                 "export TERM=xterm-256color",
                 "export TMPDIR=/tmp",
@@ -162,42 +179,68 @@ object LinuxRuntime {
         )
     }
 
+    /** Hapus path apa adanya (symlink dihapus, bukan targetnya), lalu tulis ulang sebagai berkas biasa. */
+    private fun replaceFile(f: File, text: String): Boolean = runCatching {
+        f.parentFile?.mkdirs()
+        Files.deleteIfExists(f.toPath())
+        f.writeText(text)
+        true
+    }.getOrDefault(false)
+
+    /** Tulis berkas hanya bila belum ada (jangan timpa perubahan pengguna). */
+    private fun writeIfMissing(f: File, text: String) {
+        runCatching {
+            if (Files.exists(f.toPath(), LinkOption.NOFOLLOW_LINKS) && f.exists()) return
+            replaceFile(f, text)
+        }
+    }
+
     /**
-     * Sinkronkan /etc/resolv.conf & /etc/hosts dari Android ke rootfs
-     * (dipanggil sebelum tiap start — DNS bisa berubah antar jaringan).
+     * Sinkronkan jaringan Android -> rootfs. Dipanggil sebelum tiap start.
+     *
+     * BUG LAMA: /etc/resolv.conf di image Debian adalah symlink (dangling ke
+     * /run/systemd/resolve/...). File.exists() false untuk symlink rusak -> tidak dihapus,
+     * writeText() menulis lewat symlink ke direktori yang tidak ada -> gagal diam-diam
+     * (runCatching) -> resolv.conf "hilang". Sekarang symlink dihapus dulu.
      */
     fun syncNetworkFiles(ctx: Context, rootfs: File) {
         val etc = File(rootfs, "etc")
         etc.mkdirs()
 
-        runCatching {
-            val hosts = File(etc, "hosts")
-            if (!Files.isSymbolicLink(hosts.toPath())) {
-                hosts.writeText("127.0.0.1 localhost localhost.localdomain\n")
-            }
-        }
+        val host = "vscode-mobile"
+        replaceFile(File(etc, "hostname"), "$host\n")
+        replaceFile(
+            File(etc, "hosts"),
+            "127.0.0.1 localhost localhost.localdomain $host\n" +
+                "::1 localhost ip6-localhost ip6-loopback\n"
+        )
 
         val dns = mutableListOf<String>()
         runCatching {
             val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            for (network in cm.allNetworks) {
+            // Jaringan aktif dulu, lalu sisanya.
+            val nets = listOfNotNull(cm.activeNetwork) + cm.allNetworks.toList()
+            for (network in nets) {
                 val lp = cm.getLinkProperties(network) ?: continue
                 for (addr in lp.dnsServers) {
-                    addr.hostAddress?.let { if (it !in dns) dns.add(it) }
+                    val a = addr.hostAddress ?: continue
+                    if (a.contains('%')) continue // IPv6 link-local ber-scope tak valid di resolv.conf
+                    if (a !in dns) dns.add(a)
                 }
             }
         }
-        if (dns.isEmpty()) {
-            dns.add("8.8.8.8")
-            dns.add("1.1.1.1")
-        }
-        runCatching {
-            val resolv = File(etc, "resolv.conf")
-            if (resolv.exists()) resolv.delete()
-            resolv.writeText(
-                dns.joinToString("") { "nameserver $it\n" } +
-                    "options timeout:2 attempts:2\n"
-            )
+        // Selalu sertakan DNS publik sebagai cadangan (DNS Android bisa tak terjangkau dari proot).
+        for (fb in listOf("1.1.1.1", "8.8.8.8")) if (fb !in dns) dns.add(fb)
+        val resolvText = dns.take(5).joinToString("") { "nameserver $it\n" } +
+            "options timeout:2 attempts:2\n"
+        if (!replaceFile(File(etc, "resolv.conf"), resolvText)) {
+            // Jalur cadangan: tulis lewat shell-less fallback ke /etc/resolv.conf.vscmob lalu rename.
+            runCatching {
+                val tmp = File(etc, "resolv.conf.vscmob")
+                tmp.writeText(resolvText)
+                Files.move(tmp.toPath(), File(etc, "resolv.conf").toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            }
         }
 
         runCatching {
@@ -206,5 +249,77 @@ object LinuxRuntime {
                 Files.createSymbolicLink(mtab.toPath(), Paths.get("/proc/mounts"))
             }
         }
+    }
+
+    /**
+     * Siapkan isi guest agar apt/dpkg/terminal berjalan tanpa tweak manual (idempoten).
+     */
+    fun prepareGuest(ctx: Context, rootfs: File) {
+        // Titik mount & direktori standar yang kadang tidak ada di tarball.
+        for (d in listOf("dev", "dev/shm", "proc", "sys", "run", "run/lock", "var/tmp", "var/lib/dpkg",
+            "var/cache/apt/archives/partial", "var/lib/apt/lists/partial", "root", "sdcard", "storage",
+            "etc/apt/apt.conf.d", "etc/dpkg/dpkg.cfg.d", "etc/profile.d", "opt", "usr/local/bin")) {
+            runCatching { File(rootfs, d).mkdirs() }
+        }
+        runCatching { android.system.Os.chmod(File(rootfs, "var/tmp").path, 0x3FF) } // 1777
+        runCatching { android.system.Os.chmod(File(rootfs, "dev/shm").path, 0x3FF) }
+
+        // apt: sandbox user _apt butuh setgroups/seteuid yang tidak ada di proot -> jalan sebagai root.
+        replaceFile(
+            File(rootfs, "etc/apt/apt.conf.d/99vscmob"),
+            "APT::Sandbox::User \"root\";\nAcquire::Retries \"3\";\n"
+        )
+        // dpkg: tanpa fsync berlebihan (lebih cepat & aman di filesystem Android).
+        replaceFile(
+            File(rootfs, "etc/dpkg/dpkg.cfg.d/99vscmob"),
+            "force-unsafe-io\nno-debsig\n"
+        )
+        // Login shell (terminal): PATH code-server + variabel dasar.
+        replaceFile(
+            File(rootfs, "etc/profile.d/99-vscmob.sh"),
+            "export PATH=/opt/code-server/bin:\$PATH\nexport SHELL=/bin/bash\n"
+        )
+        // Pastikan akun root ada (proot -0 butuh entri untuk nama pengguna & HOME).
+        writeIfMissing(File(rootfs, "etc/passwd"),
+            "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n")
+        writeIfMissing(File(rootfs, "etc/group"), "root:x:0:\nnogroup:x:65534:\n")
+        writeIfMissing(File(rootfs, "root/.bashrc"),
+            "# VS Code Mobile\nexport PATH=/opt/code-server/bin:\$PATH\nalias ll='ls -alF'\n")
+    }
+
+    /**
+     * Android memblokir sebagian /proc (stat, loadavg, vmstat, ... -> EACCES) sehingga
+     * free/top/uptime/ps dan beberapa alat Node gagal. Ganti dengan berkas palsu hanya bila
+     * aslinya tidak bisa dibaca. Mengembalikan pasangan (path guest, berkas host).
+     */
+    fun fakeProcBinds(ctx: Context): List<Pair<String, File>> {
+        val dir = fakeProcDir(ctx)
+        dir.mkdirs()
+        fun readable(p: String) = runCatching { File(p).inputStream().use { it.read() }; true }.getOrDefault(false)
+        val up = android.os.SystemClock.elapsedRealtime() / 1000
+        val boot = System.currentTimeMillis() / 1000 - up
+        val cpus = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
+        val statText = buildString {
+            append("cpu  ${up * 50} 0 ${up * 20} ${up * 400} 0 0 0 0 0 0\n")
+            for (i in 0 until cpus) append("cpu$i ${up * 50 / cpus} 0 ${up * 20 / cpus} ${up * 400 / cpus} 0 0 0 0 0 0\n")
+            append("intr 0\nctxt 0\nbtime $boot\nprocesses 1\nprocs_running 1\nprocs_blocked 0\n")
+        }
+        val defs = listOf(
+            Triple("/proc/stat", "stat", statText),
+            Triple("/proc/loadavg", "loadavg", "0.10 0.10 0.10 1/100 1\n"),
+            Triple("/proc/uptime", "uptime", "$up.00 ${up * cpus}.00\n"),
+            Triple("/proc/version", "version",
+                "Linux version 6.2.1-vscmob (proot@android) (gcc 12.2.0) #1 SMP PREEMPT\n"),
+            Triple("/proc/vmstat", "vmstat", "nr_free_pages 100000\nnr_inactive_anon 0\nnr_active_anon 0\n"),
+            Triple("/proc/sys/kernel/cap_last_cap", "cap_last_cap", "40\n")
+        )
+        val out = mutableListOf<Pair<String, File>>()
+        for ((guest, name, text) in defs) {
+            if (readable(guest)) continue
+            val f = File(dir, name)
+            runCatching { f.writeText(text) }
+            if (f.exists()) out.add(guest to f)
+        }
+        return out
     }
 }

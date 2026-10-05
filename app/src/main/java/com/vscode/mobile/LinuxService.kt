@@ -107,6 +107,7 @@ class LinuxService : Service() {
         logFile.parentFile?.mkdirs()
 
         while (!stopRequested) {
+            LinuxRuntime.prepareGuest(this, LinuxRuntime.rootfsDir(this))
             LinuxRuntime.syncNetworkFiles(this, LinuxRuntime.rootfsDir(this))
             LinuxRuntime.writeStartScript(LinuxRuntime.rootfsDir(this))
             _state.value = ServerState.Starting
