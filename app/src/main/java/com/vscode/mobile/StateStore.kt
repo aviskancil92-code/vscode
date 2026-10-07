@@ -3,7 +3,9 @@ package com.vscode.mobile
 import android.content.Context
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.SecureRandom
 
 /**
@@ -58,7 +60,20 @@ object StateStore {
         o.put("password", state.password)
         o.put("keepScreenOn", state.keepScreenOn)
         o.put("createdAt", state.createdAt)
-        f.writeText(o.toString())
+        val tmp = File(f.parentFile, ".state.json.tmp")
+        FileOutputStream(tmp).use { out ->
+            out.write(o.toString().toByteArray(Charsets.UTF_8))
+            out.fd.sync()
+        }
+        try {
+            Files.move(
+                tmp.toPath(), f.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING
+            )
+        } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+            Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     fun write(ctx: Context, state: AppState) = writeTo(linuxDir(ctx), state)

@@ -2,6 +2,7 @@ package com.vscode.mobile
 
 import android.content.Context
 import android.net.Uri
+import android.os.storage.StorageManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -10,6 +11,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 
 /**
  * Installer pertama kali:
@@ -81,11 +83,11 @@ class Installer(private val ctx: Context) {
     ) {
         onProgress(Progress("Mengambil indeks paket Termux…"))
         val packages = fetchPackagesIndex(termuxArch)
-        val prootPath = packages["proot"]
+        val prootInfo = packages["proot"]
             ?: throw IOException("paket proot tidak ditemukan pada indeks repo Termux")
-        val tallocPath = packages["libtalloc"]
+        val tallocInfo = packages["libtalloc"]
             ?: throw IOException("paket libtalloc tidak ditemukan pada indeks repo Termux")
-        val shmemPath = packages["libandroid-shmem"]
+        val shmemInfo = packages["libandroid-shmem"]
             ?: throw IOException("paket libandroid-shmem tidak ditemukan pada indeks repo Termux")
 
         val debsDir = File(staging, "debs")
@@ -93,13 +95,25 @@ class Installer(private val ctx: Context) {
         val tallocDeb = File(debsDir, "libtalloc.deb")
         val shmemDeb = File(debsDir, "libandroid-shmem.deb")
 
-        Net.download(Pins.TERMUX_REPO + prootPath, prootDeb) { r, t, s ->
+        Net.download(
+            Pins.TERMUX_REPO + prootInfo.path, prootDeb, prootInfo.sha256,
+            expectedSizeBytes = prootInfo.size.takeIf { it > 0L },
+            availableSpaceBytes = { allocatableBytes(prootDeb) }
+        ) { r, t, s ->
             onProgress(Progress("Mengunduh proot…", "(${termuxArch})", r, t, s))
         }
-        Net.download(Pins.TERMUX_REPO + tallocPath, tallocDeb) { r, t, s ->
+        Net.download(
+            Pins.TERMUX_REPO + tallocInfo.path, tallocDeb, tallocInfo.sha256,
+            expectedSizeBytes = tallocInfo.size.takeIf { it > 0L },
+            availableSpaceBytes = { allocatableBytes(tallocDeb) }
+        ) { r, t, s ->
             onProgress(Progress("Mengunduh libtalloc…", "", r, t, s))
         }
-        Net.download(Pins.TERMUX_REPO + shmemPath, shmemDeb) { r, t, s ->
+        Net.download(
+            Pins.TERMUX_REPO + shmemInfo.path, shmemDeb, shmemInfo.sha256,
+            expectedSizeBytes = shmemInfo.size.takeIf { it > 0L },
+            availableSpaceBytes = { allocatableBytes(shmemDeb) }
+        ) { r, t, s ->
             onProgress(Progress("Mengunduh libandroid-shmem…", "", r, t, s))
         }
 
@@ -110,22 +124,22 @@ class Installer(private val ctx: Context) {
         Archive.extractDebToDir(tallocDeb, debOut)
         Archive.extractDebToDir(shmemDeb, debOut)
 
-        val proot = findFile(debOut) { f ->
+        val prootFile = findFile(debOut) { f ->
             !Files.isSymbolicLink(f.toPath()) && f.isFile && f.name == "proot"
         } ?: throw IOException("biner proot tidak ditemukan di dalam paket .deb")
 
-        val talloc = findFile(debOut) { f ->
+        val tallocFile = findFile(debOut) { f ->
             !Files.isSymbolicLink(f.toPath()) && f.isFile &&
                 Regex("^libtalloc\\.so\\.2").containsMatchIn(f.name)
         } ?: throw IOException("libtalloc.so.2 tidak ditemukan di dalam paket .deb")
 
-        val shmem = findFile(debOut) { f ->
+        val shmemFile = findFile(debOut) { f ->
             !Files.isSymbolicLink(f.toPath()) && f.isFile && f.name == "libandroid-shmem.so"
         } ?: throw IOException("libandroid-shmem tidak ditemukan di dalam paket .deb")
 
-        copyTo(proot, File(staging, "bin/proot"), 0x1ED)      // 0755
-        copyTo(talloc, File(staging, "lib/libtalloc.so.2"), 0x1A4) // 0644
-        copyTo(shmem, File(staging, "lib/libandroid-shmem.so"), 0x1A4) // 0644
+        copyTo(prootFile, File(staging, "bin/proot"), 0x1ED)      // 0755
+        copyTo(tallocFile, File(staging, "lib/libtalloc.so.2"), 0x1A4) // 0644
+        copyTo(shmemFile, File(staging, "lib/libandroid-shmem.so"), 0x1A4) // 0644
 
         // Loader proot (bila build Termux memisahkannya dari biner). Tanpa ini execve
         // ke dalam rootfs gagal. Opsional: build yang meng-embed loader tak punya berkasnya.
@@ -142,7 +156,7 @@ class Installer(private val ctx: Context) {
         StateStore.deleteRecursive(debsDir)
     }
 
-    private fun fetchPackagesIndex(termuxArch: String): Map<String, String> {
+    private fun fetchPackagesIndex(termuxArch: String): Map<String, PackageInfo> {
         val path = "dists/stable/main/binary-$termuxArch/Packages"
         val text = try {
             Net.getText(Pins.TERMUX_REPO + path)
@@ -167,19 +181,18 @@ class Installer(private val ctx: Context) {
                 onProgress(Progress("Menyalin rootfs…", "", r, t, 0))
             }
         } else {
-            val urls = resolveRootfsUrls(rootfsArch)
-            if (urls.isEmpty()) {
-                throw IOException(
-                    "Daftar build Debian ($rootfsArch) tidak dapat dibaca dari linuxcontainers.org. " +
-                        "Coba lagi nanti atau gunakan Impor manual rootfs dari Pengaturan."
-                )
-            }
+            onProgress(Progress("Memeriksa daftar build Debian…", rootfsArch))
+            val base = Pins.LXC_BASE + Pins.DEBIAN_RELEASE + "/" + rootfsArch + "/default/"
+            val urls = RootfsCatalog.resolve(base) { url -> Net.getText(url, 25_000) }
             rootfsFile = File(File(staging, "downloads"), "rootfs.tar.xz")
             var lastError: IOException? = null
             var ok = false
             for (url in urls) {
                 try {
-                    Net.download(url, rootfsFile) { r, t, s ->
+                    Net.download(
+                        url.url, rootfsFile, url.sha256,
+                        availableSpaceBytes = { allocatableBytes(rootfsFile) }
+                    ) { r, t, s ->
                         onProgress(Progress("Mengunduh rootfs Debian $rootfsArch…", "Debian ${Pins.DEBIAN_RELEASE}", r, t, s))
                     }
                     ok = true
@@ -216,26 +229,6 @@ class Installer(private val ctx: Context) {
         rootfsFile.delete()
     }
 
-    /**
-     * Cari URL rootfs terbaru: scrape daftar tanggal build di
-     * images.linuxcontainers.org (diurutkan menurun, dicoba satu per satu).
-     */
-    private fun resolveRootfsUrls(rootfsArch: String): List<String> {
-        val base = Pins.LXC_BASE + Pins.DEBIAN_RELEASE + "/" + rootfsArch + "/default/"
-        val html = try {
-            Net.getText(base, 25_000)
-        } catch (_: Exception) {
-            return emptyList()
-        }
-        val dates = Regex("href=\"(\\d{8}_\\d{2}(?:%3A|:)\\d{2})/\"")
-            .findAll(html)
-            .map { it.groupValues[1] }
-            .distinct()
-            .sortedDescending()
-            .toList()
-        return dates.take(3).map { base + it + "/rootfs.tar.xz" }
-    }
-
     // ------------------------------------------------------------ code-server
 
     private suspend fun installCodeServer(
@@ -253,8 +246,15 @@ class Installer(private val ctx: Context) {
             }
         } else {
             val url = Pins.codeServerUrl(version, csArch)
+            val checksum = Pins.codeServerSha256(version, csArch)
+                ?: throw IOException("checksum code-server $version/$csArch belum tersedia; gunakan impor manual")
             tarball = File(File(staging, "downloads"), "code-server.tar.gz")
-            Net.download(url, tarball) { r, t, s ->
+            Net.download(
+                url,
+                tarball,
+                expectedSha256 = checksum,
+                availableSpaceBytes = { allocatableBytes(tarball) }
+            ) { r, t, s ->
                 onProgress(Progress("Mengunduh code-server $version…", "($csArch)", r, t, s))
             }
         }
@@ -292,22 +292,51 @@ class Installer(private val ctx: Context) {
     private fun finalize(staging: File) {
         val rootfs = File(staging, "debian")
         LinuxRuntime.writeStartScript(rootfs)
-        LinuxRuntime.writeServerConfig(rootfs, authEnabled = false, password = "")
+
+        // Generate a unique per-device password and enable authentication by default
+        // This ensures every installation is secured without user intervention
+        val generatedPassword = StateStore.newPassword()
+        LinuxRuntime.writeServerConfig(rootfs, authEnabled = true, password = generatedPassword)
+
         val state = AppState(
             installed = true,
             codeServerVersion = LinuxRuntime.codeServerVersionFor(),
             rootfsSource = "debian/${Pins.DEBIAN_RELEASE} (linuxcontainers.org)",
-            authEnabled = false,
-            password = "",
+            authEnabled = true,
+            password = generatedPassword,
             keepScreenOn = false,
             createdAt = System.currentTimeMillis()
         )
         StateStore.writeTo(staging, state)
 
         val final = StateStore.linuxDir(ctx)
-        if (final.exists()) StateStore.deleteRecursive(final)
-        if (!staging.renameTo(final)) {
-            throw IOException("gagal memfinalisasi instalasi (rename staging)")
+        val backup = File(ctx.filesDir, "linux-previous")
+        StateStore.deleteRecursive(backup)
+        var movedOld = false
+        try {
+            if (final.exists()) {
+                try {
+                    Files.move(final.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    Files.move(final.toPath(), backup.toPath())
+                }
+                movedOld = true
+            }
+            try {
+                Files.move(staging.toPath(), final.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                Files.move(staging.toPath(), final.toPath())
+            }
+            StateStore.deleteRecursive(backup)
+        } catch (e: Exception) {
+            if (movedOld && !final.exists() && backup.exists()) {
+                try {
+                    Files.move(backup.toPath(), final.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    Files.move(backup.toPath(), final.toPath())
+                }
+            }
+            throw IOException("gagal memfinalisasi instalasi (runtime lama dipulihkan)", e)
         }
     }
 
@@ -341,6 +370,15 @@ class Installer(private val ctx: Context) {
                 total = afd.length
             }
         } catch (_: Exception) { }
+        if (total > Net.MAX_ARTIFACT_BYTES) {
+            input.close()
+            throw IOException("berkas impor melebihi batas ${Net.MAX_ARTIFACT_BYTES} byte")
+        }
+        val availableBytes = allocatableBytes(dest)
+        if (total >= 0L && availableBytes != null && total > availableBytes) {
+            input.close()
+            throw IOException("ruang penyimpanan tidak cukup ($availableBytes tersedia, $total dibutuhkan)")
+        }
 
         input.use { i ->
             FileOutputStream(dest).use { out ->
@@ -349,12 +387,18 @@ class Installer(private val ctx: Context) {
                 while (true) {
                     val n = i.read(buf)
                     if (n < 0) break
+                    val nextRead = Net.checkedByteCount(read, n, Net.MAX_ARTIFACT_BYTES)
                     out.write(buf, 0, n)
-                    read += n
+                    read = nextRead
                     onProgress(read, total)
                 }
                 out.fd.sync()
             }
         }
     }
+
+    private fun allocatableBytes(file: File): Long? = runCatching {
+        val storage = ctx.getSystemService(StorageManager::class.java) ?: return null
+        storage.getAllocatableBytes(storage.getUuidForPath(file.absoluteFile))
+    }.getOrNull()
 }

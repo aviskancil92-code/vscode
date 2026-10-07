@@ -70,6 +70,10 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
+    private companion object {
+        const val MAX_WEB_DOWNLOAD_BYTES = 512L * 1024L * 1024L
+    }
+
     private enum class Mode { Setup, SetupFailed, Installing, Loading, Web }
 
     private lateinit var binding: ActivityMainBinding
@@ -189,7 +193,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (keyboardVisible()) { setKeyboardOpen(false); return }
                 val wv = webView
-                if (mode == Mode.Web && wv != null && wv.canGoBack()) wv.goBack()
+                if (mode == Mode.Web && wv != null && wv.canGoBack()) {
+                    wv.goBack()
+                }
                 else moveTaskToBack(false)
             }
         })
@@ -575,20 +581,13 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun configureWebView(wv: WebView) {
         val s = wv.settings
-        s.javaScriptEnabled = true
-        s.domStorageEnabled = true
-        s.databaseEnabled = true
-        s.allowFileAccess = false
-        s.allowContentAccess = false
+        hardenWebSettings(s, multipleWindows = true)
         s.textZoom = 100
         s.useWideViewPort = true
         s.loadWithOverviewMode = false
         s.setSupportZoom(true)
         s.builtInZoomControls = true
         s.displayZoomControls = false
-        // Login OAuth (GitHub/Google dsb.): butuh window.open/popup + cookie pihak ketiga.
-        s.setSupportMultipleWindows(true)
-        s.javaScriptCanOpenWindowsAutomatically = true
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(wv, true)
@@ -664,27 +663,66 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Kebijakan bersama untuk WebView utama dan popup OAuth. */
+    private fun hardenWebSettings(s: WebSettings, multipleWindows: Boolean) {
+        s.javaScriptEnabled = true
+        s.domStorageEnabled = true
+        s.databaseEnabled = true
+        s.allowFileAccess = false
+        s.allowContentAccess = false
+        s.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+        s.safeBrowsingEnabled = true
+        s.mediaPlaybackRequiresUserGesture = true
+        s.setSupportMultipleWindows(multipleWindows)
+        s.javaScriptCanOpenWindowsAutomatically = multipleWindows
+    }
+
     /**
      * Unduh berkas dari code-server. Sengaja TIDAK memakai DownloadManager
      * sistem karena layanan itu berjalan di proses lain yang tidak bisa
      * mengakses 127.0.0.1 milik aplikasi ini.
      */
     private fun handleDownload(url: String, contentDisposition: String?, mimetype: String?) {
+        val parsed = runCatching { Uri.parse(url) }.getOrNull()
+        val host = parsed?.host
+        val scheme = parsed?.scheme?.lowercase(Locale.US)
+        if (parsed == null || parsed.userInfo != null ||
+            (scheme != "https" && !(scheme == "http" && isLocalHost(host)))) {
+            Toast.makeText(
+                this,
+                getString(R.string.download_failed_fmt, "URL tidak diizinkan"),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         val name = URLUtil.guessFileName(url, contentDisposition, mimetype)
+            .replace(Regex("[/\\\\\\u0000-\\u001F]"), "_")
+            .trim()
+            .take(120)
+            .ifBlank { "download.bin" }
         Toast.makeText(this, getString(R.string.downloading_fmt, name), Toast.LENGTH_SHORT).show()
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val dir = downloadDir()
                 dir.mkdirs()
                 val f = File(dir, name)
+                val part = File(dir, ".$name.part")
                 val conn = URL(url).openConnection() as HttpURLConnection
                 conn.connectTimeout = 10_000
                 conn.readTimeout = 60_000
+                conn.instanceFollowRedirects = false
                 try {
                     if (conn.responseCode !in 200..299) throw IOException("HTTP ${conn.responseCode}")
-                    FileOutputStream(f).use { out ->
-                        conn.inputStream.use { it.copyTo(out) }
+                    if (conn.contentLengthLong > MAX_WEB_DOWNLOAD_BYTES) {
+                        throw IOException("berkas terlalu besar")
                     }
+                    FileOutputStream(part).use { out ->
+                        conn.inputStream.use { it.copyTo(out) }
+                        out.fd.sync()
+                    }
+                    if (part.length() > MAX_WEB_DOWNLOAD_BYTES) throw IOException("berkas terlalu besar")
+                    if (f.exists()) f.delete()
+                    if (!part.renameTo(f)) throw IOException("gagal menyimpan unduhan")
                 } finally {
                     conn.disconnect()
                 }
@@ -696,6 +734,7 @@ class MainActivity : AppCompatActivity() {
                     ).show()
                 }
             } catch (e: Exception) {
+                runCatching { File(downloadDir(), ".$name.part").delete() }
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         this@MainActivity,
@@ -905,13 +944,7 @@ class MainActivity : AppCompatActivity() {
 
         pw.setBackgroundColor(0xFF0F1115.toInt())
         pw.settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            databaseEnabled = true
-            allowFileAccess = false
-            allowContentAccess = false
-            setSupportMultipleWindows(true)
-            javaScriptCanOpenWindowsAutomatically = true
+            hardenWebSettings(this, multipleWindows = true)
             userAgentString = chromeUserAgent()
         }
         CookieManager.getInstance().setAcceptThirdPartyCookies(pw, true)

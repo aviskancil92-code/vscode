@@ -47,7 +47,7 @@ object LinuxRuntime {
         return if (arches.third == "armv7l") Pins.CODE_SERVER_VERSION_ARMV7 else Pins.CODE_SERVER_VERSION
     }
 
-    /** Perintah lengkap untuk menjalankan code-server di dalam Debian via proot. */
+    /** Perintah lengkap code-server; path guest lama dipertahankan persis. */
     fun prootCommand(ctx: Context): List<String> {
         val cmd = mutableListOf(
             prootBin(ctx).path,
@@ -254,7 +254,7 @@ object LinuxRuntime {
     /**
      * Siapkan isi guest agar apt/dpkg/terminal berjalan tanpa tweak manual (idempoten).
      */
-    fun prepareGuest(ctx: Context, rootfs: File) {
+    fun prepareGuest(rootfs: File) {
         // Titik mount & direktori standar yang kadang tidak ada di tarball.
         for (d in listOf("dev", "dev/shm", "proc", "sys", "run", "run/lock", "var/tmp", "var/lib/dpkg",
             "var/cache/apt/archives/partial", "var/lib/apt/lists/partial", "root", "sdcard", "storage",

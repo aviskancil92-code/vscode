@@ -26,8 +26,8 @@ android {
         // Dengan targetSdk 28, menjalankan userland Linux tanpa root tetap legal.
         // Jangan naikkan ke 29+ kecuali Anda tahu konsekuensinya.
         targetSdk = 28
-        versionCode = 8
-        versionName = "1.1.0"
+        versionCode = 13
+        versionName = "1.1.5"
     }
 
     signingConfigs {
@@ -86,4 +86,5 @@ dependencies {
 
     // Dekompresi XZ (rootfs Debian .tar.xz) — murni Java, aman di Android.
     implementation("org.tukaani:xz:1.9")
+    testImplementation("junit:junit:4.13.2")
 }

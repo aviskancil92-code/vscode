@@ -33,6 +33,14 @@ object Pins {
 
     const val CODE_SERVER_BASE = "https://github.com/coder/code-server/releases/download/"
 
+    fun codeServerSha256(version: String, arch: String): String? = when {
+        version == CODE_SERVER_VERSION && arch == "amd64" ->
+            "864c5d01c808ade57e4d12c708717be7a187219fded60428f263b9e2da9f6b48"
+        version == CODE_SERVER_VERSION && arch == "arm64" ->
+            "ae4b07153f2037b06d24749bc8004221fcbf3ffe317038401be0452f541bf200"
+        else -> null // GitHub release 4.23.1 armv7l tidak menerbitkan digest API.
+    }
+
     /** Rilis Debian untuk rootfs (bookworm = Debian 12, stabil). */
     const val DEBIAN_RELEASE = "bookworm"
 

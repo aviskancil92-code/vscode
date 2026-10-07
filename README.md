@@ -43,8 +43,12 @@ terminal Debian, ekstensi, dan Git.
 - Terminal Debian asli di dalam VS Code (`apt update && apt install git`
   langsung bekerja), ekstensi VS Code via Marketplace, folder kerja di `/root`,
   dan akses penyimpanan bersama lewat `/sdcard` (bila izin diberikan).
-- Autentikasi opsional: default `auth: none` (server hanya di `127.0.0.1`);
-  aktifkan kata sandi dari Pengaturan.
+- Autentikasi **diaktifkan secara otomatis** untuk setiap perangkat: installer
+  menghasilkan kata sandi acak yang kuat (12 karakter, tanpa simbol mirip) dan
+  mengaktifkan `auth: password` di code-server. Kata sandi ini ditampilkan di
+  Pengaturan → Lihat kata sandi, jadi tidak perlu diingat secara manual.
+  Server hanya di `127.0.0.1`, jadi kata sandi melindungi akses lokal saja;
+  matikan dari Pengaturan jika Anda yakin hanya Anda yang menggunakan perangkat.
 
 ## Kenapa `targetSdk 28`?
 
@@ -120,6 +124,7 @@ app/src/main/java/com/vscode/mobile/
 ├── LinuxService.kt    — foreground service: siklus proot, restart, notifikasi
 ├── Installer.kt       — instalasi bertahap + impor manual + finalisasi atomik
 ├── LinuxRuntime.kt    — perintah proot, env, config guest, resolv.conf
+├── KivyGuiConfig.kt   — port, URL noVNC, password, dan ukuran Xvfb
 ├── Archive.kt         — pembaca tar (GNU/pax), ar (.deb), XZ/GZIP
 ├── Net.kt             — unduhan resume+retry, parser indeks apt
 ├── StateStore.kt      — persistensi status (JSON)
@@ -140,3 +145,9 @@ app/src/main/java/com/vscode/mobile/
 Lihat [NOTICE.md](NOTICE.md). Proyek ini menyertakan tautan unduhan ke
 komponen pihak ketiga saat instalasi (bukan dibundel di dalam APK):
 code-server (MIT), Debian, proot (GPL), libtalloc, libandroid-shmem.
+
+## Kompatibilitas Python
+
+Build 1.1.5 mempertahankan terminal Debian biasa tanpa mencegat perintah `python`/`python3` dan tanpa pemilih interpreter otomatis. Python tidak dijamin terpasang pada rootfs minimal; bila dibutuhkan, pasang sesuai kebutuhan dari terminal Debian (misalnya `apt update && apt install python3`). Dukungan GUI Kivy belum menjadi bagian dari baseline ini; fokus saat ini adalah kompatibilitas runtime inti. Paket Debian yang mungkin sudah terpasang oleh versi lama tidak dihapus otomatis agar data dan pilihan paket pengguna tetap utuh.
+
+## Kenapa `targetSdk 28`?

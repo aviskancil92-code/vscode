@@ -2,7 +2,6 @@ package com.vscode.mobile
 
 import android.system.Os
 import org.tukaani.xz.XZInputStream
-import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -12,6 +11,7 @@ import java.io.PushbackInputStream
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
 import java.nio.file.Paths
 import java.util.zip.GZIPInputStream
 
@@ -24,6 +24,25 @@ import java.util.zip.GZIPInputStream
  * Semua entri divalidasi terhadap path-traversal (zip-slip).
  */
 object Archive {
+
+    private const val MAX_METADATA_BYTES = 4L * 1024L * 1024L
+    private const val MAX_ENTRY_BYTES = 512L * 1024L * 1024L
+    private const val MAX_EXPANDED_BYTES = 3L * 1024L * 1024L * 1024L
+    private const val MAX_ENTRIES = 250_000
+    private const val MAX_DEB_DATA_BYTES = 256L * 1024L * 1024L
+
+    internal fun checkedExpandedByteCount(
+        currentBytes: Long,
+        additionalBytes: Long,
+        maxBytes: Long = MAX_EXPANDED_BYTES
+    ): Long {
+        if (currentBytes < 0L || additionalBytes < 0L || maxBytes < 0L ||
+            additionalBytes > maxBytes - currentBytes
+        ) {
+            throw IOException("ukuran hasil ekstraksi melewati batas aman")
+        }
+        return currentBytes + additionalBytes
+    }
 
     /** InputStream penghitung byte mentah (untuk progres unduhan/ekstraksi). */
     class CountingInputStream(private val wrapped: InputStream) : InputStream() {
@@ -163,6 +182,9 @@ object Archive {
     }
 
     private fun readData(input: InputStream, size: Long): ByteArray {
+        if (size < 0 || size > MAX_METADATA_BYTES || size > Int.MAX_VALUE) {
+            throw IOException("metadata arsip terlalu besar: $size byte")
+        }
         val out = ByteArray(size.toInt())
         var done = 0
         while (done < out.size) {
@@ -208,20 +230,69 @@ object Archive {
         return Pair(path, linkpath)
     }
 
-    /**
-     * Validasi & resolve nama entri terhadap root output (anti zip-slip).
-     * Pemeriksaan LEKSIKAL (normalize): canonicalPath mengikuti symlink absolut di dalam
-     * rootfs (mis. var/lock -> /run/lock) lalu keliru dianggap "di luar direktori tujuan".
-     */
+    /** Tolak path lexical maupun symlink parent yang membawa operasi ke luar root ekstraksi. */
+    private fun requireInsideRoot(rootPath: Path, path: Path, description: String) {
+        if (path != rootPath && !path.startsWith(rootPath)) {
+            throw IOException("path arsip di luar direktori tujuan: $description")
+        }
+        val canonical = path.toFile().canonicalFile.toPath()
+        if (canonical != rootPath && !canonical.startsWith(rootPath)) {
+            throw IOException("path arsip melewati symlink ke luar direktori tujuan: $description")
+        }
+    }
+
+    /** Resolve nama entri dan validasi parent setelah seluruh symlink yang ada di-resolve. */
     private fun safeTarget(root: File, name: String): File {
+        val rootPath = root.canonicalFile.toPath()
         val rel = name.removePrefix("./").removePrefix("/")
         if (rel.isEmpty()) return root
-        val rootPath = root.toPath().toAbsolutePath().normalize()
         val target = rootPath.resolve(rel).normalize()
         if (target != rootPath && !target.startsWith(rootPath)) {
             throw IOException("entri tar tidak aman (di luar direktori tujuan): $name")
         }
+        // Tar rootfs lazim berisi entri direktori `.` atau `./`; root sendiri valid,
+        // tetapi parent-nya memang berada di luar root ekstraksi dan tidak perlu dicek.
+        if (target == rootPath) return root
+        requireInsideRoot(rootPath, target.parent ?: rootPath, name)
         return target.toFile()
+    }
+
+    /**
+     * Symlink arsip memakai namespace guest: target absolut seperti /usr/bin berarti
+     * <rootfs>/usr/bin, bukan /usr/bin pada host. Target relatif tetap relatif ke parent
+     * entri. Link disimpan sebagai path relatif agar tidak menunjuk ke root host.
+     */
+    private fun safeSymlinkTarget(root: File, dst: File, link: String): Path {
+        if (link.isEmpty()) throw IOException("target symlink kosong")
+        val rootPath = root.canonicalFile.toPath()
+        val dstPath = dst.toPath().toAbsolutePath().normalize()
+        val parent = dstPath.parent ?: rootPath
+        val raw = try {
+            Paths.get(link)
+        } catch (e: Exception) {
+            throw IOException("target symlink tidak valid: $link", e)
+        }
+        val target = if (raw.isAbsolute) {
+            rootPath.resolve(link.removePrefix("/")).normalize()
+        } else {
+            parent.resolve(raw).normalize()
+        }
+        requireInsideRoot(rootPath, target, link)
+        return parent.relativize(target)
+    }
+
+    /** Hapus leaf lama tanpa mengikuti symlink; file output baru tidak pernah menulis lewatnya. */
+    private fun prepareFileDestination(root: File, dst: File) {
+        val rootPath = root.canonicalFile.toPath()
+        val dstPath = dst.toPath()
+        requireInsideRoot(rootPath, dstPath.parent ?: rootPath, dst.path)
+        if (Files.isSymbolicLink(dstPath)) Files.delete(dstPath)
+        if (Files.exists(dstPath, LinkOption.NOFOLLOW_LINKS)) {
+            if (Files.isDirectory(dstPath, LinkOption.NOFOLLOW_LINKS)) {
+                throw IOException("tujuan file arsip bertabrakan dengan direktori: ${dst.path}")
+            }
+            Files.delete(dstPath)
+        }
     }
 
     /** Direktori: owner wajib rwx (rootfs punya dir 0555; tanpa ini isi di dalamnya gagal ditulis). */
@@ -241,6 +312,7 @@ object Archive {
     suspend fun extractTar(input: InputStream, outputDir: File, onProgress: suspend (Long) -> Unit = {}): Int {
         outputDir.mkdirs()
         var entries = 0
+        var expandedBytes = 0L
         var lastReport = 0L
         var pendingLongName: String? = null
         var pendingLongLink: String? = null
@@ -249,6 +321,11 @@ object Archive {
 
         while (true) {
             val hdr = readHeader(input) ?: break
+
+            if (++entries > MAX_ENTRIES) throw IOException("arsip memiliki terlalu banyak entri")
+            if (hdr.size < 0 || hdr.size > MAX_ENTRY_BYTES) {
+                throw IOException("entri arsip terlalu besar: ${hdr.size} byte")
+            }
 
             when (hdr.type) {
                 'L' -> { pendingLongName = readData(input, hdr.size).toString(Charsets.UTF_8).trimEnd('\u0000', '\n'); continue }
@@ -273,42 +350,73 @@ object Archive {
             when (hdr.type) {
                 '5', 'D' -> {
                     val dir = safeTarget(outputDir, name)
+                    if (Files.isSymbolicLink(dir.toPath())) {
+                        throw IOException("entri direktori bertabrakan dengan symlink: $name")
+                    }
                     dir.mkdirs()
+                    if (!dir.isDirectory) throw IOException("gagal membuat direktori arsip: $name")
                     chmod(dir, dirMode(hdr.mode))
                 }
                 '2' -> { // symlink
                     val dst = safeTarget(outputDir, name)
-                    dst.parentFile?.mkdirs()
-                    try {
-                        if (Files.exists(dst.toPath(), LinkOption.NOFOLLOW_LINKS)) Files.delete(dst.toPath())
-                        Files.createSymbolicLink(dst.toPath(), Paths.get(link))
-                    } catch (_: java.nio.file.FileAlreadyExistsException) { }
+                    val parent = dst.parentFile ?: throw IOException("symlink tanpa parent: $name")
+                    parent.mkdirs()
+                    requireInsideRoot(outputDir.canonicalFile.toPath(), parent.toPath(), name)
+                    if (Files.exists(dst.toPath(), LinkOption.NOFOLLOW_LINKS)) Files.delete(dst.toPath())
+                    Files.createSymbolicLink(dst.toPath(), safeSymlinkTarget(outputDir, dst, link))
                 }
                 '1' -> { // hardlink
                     val src = safeTarget(outputDir, link)
                     val dst = safeTarget(outputDir, name)
-                    dst.parentFile?.mkdirs()
+                    val parent = dst.parentFile ?: throw IOException("hardlink tanpa parent: $name")
+                    parent.mkdirs()
+                    val rootPath = outputDir.canonicalFile.toPath()
+                    requireInsideRoot(rootPath, parent.toPath(), name)
                     if (Files.isSymbolicLink(src.toPath())) {
-                        Files.createSymbolicLink(dst.toPath(), Files.readSymbolicLink(src.toPath()))
-                    } else if (src.exists()) {
-                        FileInputStream(src).use { i -> FileOutputStream(dst).use { o -> i.copyTo(o) } }
+                        val srcPath = src.toPath()
+                        val rawTarget = Files.readSymbolicLink(srcPath)
+                        val sourceParent = srcPath.parent ?: rootPath
+                        val target = if (rawTarget.isAbsolute) {
+                            rootPath.resolve(rawTarget.toString().removePrefix("/")).normalize()
+                        } else {
+                            sourceParent.resolve(rawTarget).normalize()
+                        }
+                        requireInsideRoot(rootPath, target, link)
+                        prepareFileDestination(outputDir, dst)
+                        Files.createSymbolicLink(
+                            dst.toPath(), dst.toPath().parent.relativize(target)
+                        )
+                    } else if (Files.exists(src.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                        val source = src.canonicalFile
+                        requireInsideRoot(rootPath, source.toPath(), link)
+                        if (!source.isFile) throw IOException("target hardlink bukan berkas biasa: $link")
+                        val nextExpandedBytes = checkedExpandedByteCount(expandedBytes, source.length())
+                        prepareFileDestination(outputDir, dst)
+                        FileInputStream(source).use { i ->
+                            FileOutputStream(dst).use { o -> copyExactly(i, o, source.length()) }
+                        }
                         chmod(dst, fileMode(hdr.mode))
+                        expandedBytes = nextExpandedBytes
+                    } else {
+                        throw IOException("target hardlink tidak ditemukan: $link")
                     }
                 }
                 '0', '\u0000', '7' -> { // berkas reguler
                     val dst = safeTarget(outputDir, name)
                     dst.parentFile?.mkdirs()
+                    prepareFileDestination(outputDir, dst)
+                    val nextExpandedBytes = checkedExpandedByteCount(expandedBytes, hdr.size)
                     FileOutputStream(dst).use { out -> copyExactly(input, out, hdr.size) }
                     // Data tar dipadding ke kelipatan 512 byte; WAJIB dilewati agar
                     // header berikutnya sejajar (tanpa ini: "header tar tidak valid").
                     skipFully(input, pad(hdr.size))
                     chmod(dst, fileMode(hdr.mode))
+                    expandedBytes = nextExpandedBytes
                 }
                 else -> { // fifo/device/sparse dll — lewati datanya
                     if (hdr.size > 0) skipFully(input, hdr.size + pad(hdr.size))
                 }
             }
-            entries++
             val now = System.currentTimeMillis()
             if (now - lastReport >= 250) { // jangan banjiri UI thread tiap entri (puluhan ribu berkas)
                 lastReport = now
@@ -346,19 +454,49 @@ object Archive {
                 off += 60 + size + (size and 1L)
             }
             val dn = dataName ?: throw IOException("data.tar tidak ditemukan dalam .deb")
-            raf.seek(dataOff)
-            val raw = ByteArray(dataSize.toInt())
-            raf.readFully(raw)
-
-            val bais = ByteArrayInputStream(raw)
-            val stream: InputStream = when {
-                dn.endsWith(".xz") -> XZInputStream(bais)
-                dn.endsWith(".gz") -> GZIPInputStream(bais)
-                dn.endsWith(".tar") -> bais
-                else -> throw IOException("kompresi .deb tidak didukung: $dn")
+            if (dataSize < 0 || dataSize > MAX_DEB_DATA_BYTES || dataSize > Int.MAX_VALUE) {
+                throw IOException("data.tar dalam .deb terlalu besar: $dataSize byte")
             }
+            if (!dn.endsWith(".xz") && !dn.endsWith(".gz") && !dn.endsWith(".tar")) {
+                throw IOException("kompresi .deb tidak didukung: $dn")
+            }
+
+            outDir.parentFile?.mkdirs()
             outDir.mkdirs()
-            extractTar(stream, outDir)
+            val tempData = File.createTempFile("deb-data-", ".archive", outDir.parentFile ?: outDir)
+            try {
+                raf.seek(dataOff)
+                FileOutputStream(tempData).use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    var remaining = dataSize
+                    while (remaining > 0L) {
+                        val n = raf.read(buffer, 0, minOf(remaining, buffer.size.toLong()).toInt())
+                        if (n < 0) throw IOException("data.tar terpotong dalam .deb")
+                        out.write(buffer, 0, n)
+                        remaining -= n
+                    }
+                    out.fd.sync()
+                }
+
+                val raw = FileInputStream(tempData)
+                val stream = try {
+                    when {
+                        dn.endsWith(".xz") -> XZInputStream(raw)
+                        dn.endsWith(".gz") -> GZIPInputStream(raw)
+                        else -> raw
+                    }
+                } catch (e: Exception) {
+                    raw.close()
+                    throw e
+                }
+                try {
+                    extractTar(stream, outDir)
+                } finally {
+                    stream.close()
+                }
+            } finally {
+                tempData.delete()
+            }
         } finally {
             raf.close()
         }

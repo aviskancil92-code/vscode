@@ -27,6 +27,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.util.concurrent.TimeUnit
 
 sealed class ServerState {
     object Idle : ServerState()
@@ -35,6 +36,29 @@ sealed class ServerState {
     data class Restarting(val attempt: Int) : ServerState()
     data class Error(val message: String) : ServerState()
     object Stopped : ServerState()
+}
+
+internal enum class ServerReadiness { READY, PROCESS_EXITED, STOP_REQUESTED, TIMED_OUT }
+
+/** Small deterministic readiness gate; injected clock/sleep make timeout behavior testable. */
+internal fun awaitServerReadiness(
+    timeoutMs: Long,
+    pollIntervalMs: Long,
+    isAlive: () -> Boolean,
+    shouldStop: () -> Boolean,
+    probe: () -> Boolean,
+    nowMs: () -> Long,
+    sleep: (Long) -> Unit
+): ServerReadiness {
+    val deadline = nowMs() + timeoutMs.coerceAtLeast(0L)
+    while (true) {
+        if (shouldStop()) return ServerReadiness.STOP_REQUESTED
+        if (!isAlive()) return ServerReadiness.PROCESS_EXITED
+        if (probe()) return ServerReadiness.READY
+        val remaining = deadline - nowMs()
+        if (remaining <= 0L) return ServerReadiness.TIMED_OUT
+        sleep(minOf(pollIntervalMs.coerceAtLeast(1L), remaining))
+    }
 }
 
 /**
@@ -103,17 +127,16 @@ class LinuxService : Service() {
     }
 
     private suspend fun runLoop() {
-        val logFile = File(LinuxRuntime.logsDir(this), "server.log")
-        logFile.parentFile?.mkdirs()
-
         while (!stopRequested) {
-            LinuxRuntime.prepareGuest(this, LinuxRuntime.rootfsDir(this))
-            LinuxRuntime.syncNetworkFiles(this, LinuxRuntime.rootfsDir(this))
-            LinuxRuntime.writeStartScript(LinuxRuntime.rootfsDir(this))
-            _state.value = ServerState.Starting
-            notify("Menyiapkan Linux & code-server…")
-
             try {
+                val logFile = File(LinuxRuntime.logsDir(this), "server.log")
+                logFile.parentFile?.mkdirs()
+                LinuxRuntime.prepareGuest(LinuxRuntime.rootfsDir(this))
+                LinuxRuntime.syncNetworkFiles(this, LinuxRuntime.rootfsDir(this))
+                LinuxRuntime.writeStartScript(LinuxRuntime.rootfsDir(this))
+                _state.value = ServerState.Starting
+                notify("Menyiapkan Linux & code-server…")
+
                 val pb = ProcessBuilder(LinuxRuntime.prootCommand(this)).apply {
                     environment().clear()
                     environment().putAll(LinuxRuntime.prootEnv(this@LinuxService))
@@ -142,14 +165,26 @@ class LinuxService : Service() {
                 drainer.isDaemon = true
                 drainer.start()
 
-                val ready = waitForServer(proc)
-                if (ready) {
+                val readiness = waitForServer(proc)
+                if (readiness == ServerReadiness.READY) {
                     restartCount = 0
                     _state.value = ServerState.Running(LinuxRuntime.SERVER_URL)
                     notify("VS Code aktif · 127.0.0.1:${LinuxRuntime.SERVER_PORT}")
+                } else if (readiness == ServerReadiness.TIMED_OUT && !stopRequested) {
+                    Log.e(TAG, "code-server tidak ready dalam 120 detik; menghentikan proot sebelum retry")
+                    notify("Server belum siap setelah 120 detik — mencoba ulang…")
+                    killTree()
+                    if (proc.isAlive) proc.destroyForcibly()
                 }
 
-                val exitCode = proc.waitFor()
+                if (readiness == ServerReadiness.STOP_REQUESTED || stopRequested) break
+                if (readiness == ServerReadiness.TIMED_OUT && !proc.waitFor(5, TimeUnit.SECONDS)) {
+                    proc.destroyForcibly()
+                    _state.value = ServerState.Error("proot tidak berhenti setelah readiness timeout; lihat log")
+                    notify("Proses server tidak dapat dihentikan — buka aplikasi untuk detail")
+                    break
+                }
+                val exitCode = if (readiness == ServerReadiness.TIMED_OUT) proc.exitValue() else proc.waitFor()
                 if (stopRequested) break
 
                 val now = System.currentTimeMillis()
@@ -180,16 +215,16 @@ class LinuxService : Service() {
         killTree()
     }
 
-    /** Tunggu hingga HTTP 127.0.0.1:8080 merespons (maks 120 detik). */
-    private fun waitForServer(proc: Process): Boolean {
-        val deadline = System.currentTimeMillis() + 120_000
-        while (System.currentTimeMillis() < deadline && !stopRequested) {
-            if (!proc.isAlive) return false
-            if (probeServer()) return true
-            Thread.sleep(300)
-        }
-        return false
-    }
+    /** Tunggu endpoint loopback ready, keluar, dihentikan pengguna, atau timeout 120 detik. */
+    private fun waitForServer(proc: Process): ServerReadiness = awaitServerReadiness(
+        timeoutMs = 120_000L,
+        pollIntervalMs = 300L,
+        isAlive = { proc.isAlive },
+        shouldStop = { stopRequested },
+        probe = ::probeServer,
+        nowMs = { android.os.SystemClock.elapsedRealtime() },
+        sleep = { Thread.sleep(it) }
+    )
 
     private fun probeServer(): Boolean {
         return try {
@@ -337,5 +372,6 @@ class LinuxService : Service() {
             val i = Intent(ctx, LinuxService::class.java).setAction(ACTION_STOP)
             if (Build.VERSION.SDK_INT >= 26) ctx.startForegroundService(i) else ctx.startService(i)
         }
+
     }
 }
