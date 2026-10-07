@@ -3,6 +3,7 @@
     <color name="brand">#3B82F6</color>
     <color name="brand_dark">#1D4ED8</color>
     <color name="icon_bg">#FFFFFF</color>
+    <color name="logo_bg">#101418</color> <!-- kompatibilitas: berkas lama bg_logo.xml -->
     <color name="webview_bg">#0F1115</color>
 
     <color name="bg_screen">#FAFBFD</color>

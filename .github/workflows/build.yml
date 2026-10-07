@@ -20,6 +20,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.9
+      - name: Bersihkan berkas lama yang sudah tidak dipakai
+        run: rm -f app/src/main/res/drawable/bg_logo.xml app/src/main/res/drawable/ic_launcher_fg.xml app/src/main/res/menu/menu_main.xml
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
       - uses: actions/upload-artifact@v4
