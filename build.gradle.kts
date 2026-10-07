@@ -1,5 +1,5 @@
 // File build level proyek (root).
-// VS Code Mobile — Debian + code-server + WebView untuk Android.
+// CodeX Studio — Debian + code-server + WebView untuk Android.
 
 plugins {
     id("com.android.application") version "8.5.2" apply false

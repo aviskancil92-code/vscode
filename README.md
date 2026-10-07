@@ -1,4 +1,4 @@
-# VS Code Mobile
+# CodeX Studio
 
 **VS Code di Android — Debian + code-server + WebView, tanpa root.**
 

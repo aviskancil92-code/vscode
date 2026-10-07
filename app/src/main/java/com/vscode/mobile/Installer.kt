@@ -28,7 +28,9 @@ class Installer(private val ctx: Context) {
         val detail: String = "",
         val read: Long = 0,
         val total: Long = -1,
-        val speedBps: Long = 0
+        val speedBps: Long = 0,
+        /** 0 proot, 1 Debian, 2 code-server, 3 konfigurasi akhir (untuk UI langkah-langkah). */
+        val phase: Int = 0
     )
 
     suspend fun install(
@@ -49,16 +51,16 @@ class Installer(private val ctx: Context) {
 
         try {
             // ---- 1) proot + library pendukung -------------------------------
-            installProot(staging, termuxArch, onProgress)
+            installProot(staging, termuxArch) { p -> onProgress(p.copy(phase = 0)) }
 
             // ---- 2) rootfs Debian -------------------------------------------
-            installRootfs(staging, rootfsArch, manualRootfs, onProgress)
+            installRootfs(staging, rootfsArch, manualRootfs) { p -> onProgress(p.copy(phase = 1)) }
 
             // ---- 3) code-server ---------------------------------------------
-            installCodeServer(staging, csArch, manualCodeServer, onProgress)
+            installCodeServer(staging, csArch, manualCodeServer) { p -> onProgress(p.copy(phase = 2)) }
 
             // ---- 4) konfigurasi + finalisasi --------------------------------
-            onProgress(Progress("Menulis konfigurasi…"))
+            onProgress(Progress("Menulis konfigurasi…", phase = 3))
             finalize(staging)
             StateStore.read(ctx)
         } catch (e: CancellationException) {

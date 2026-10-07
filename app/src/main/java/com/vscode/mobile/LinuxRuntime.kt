@@ -145,7 +145,7 @@ object LinuxRuntime {
         f.writeText(
             listOf(
                 "#!/bin/bash",
-                "# Dibuat otomatis oleh VS Code Mobile. Jangan dihapus.",
+                "# Dibuat otomatis oleh CodeX Studio. Jangan dihapus.",
                 "unset LD_LIBRARY_PATH",
                 "unset PROOT_TMP_DIR",
                 "unset PROOT_NO_SECCOMP",
@@ -284,7 +284,7 @@ object LinuxRuntime {
             "root:x:0:0:root:/root:/bin/bash\nnobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin\n")
         writeIfMissing(File(rootfs, "etc/group"), "root:x:0:\nnogroup:x:65534:\n")
         writeIfMissing(File(rootfs, "root/.bashrc"),
-            "# VS Code Mobile\nexport PATH=/opt/code-server/bin:\$PATH\nalias ll='ls -alF'\n")
+            "# CodeX Studio\nexport PATH=/opt/code-server/bin:\$PATH\nalias ll='ls -alF'\n")
     }
 
     /**

@@ -1,6 +1,6 @@
 # NOTICE — Atribusi Komponen Pihak Ketiga
 
-APK **VS Code Mobile** tidak membundel biner pihak ketiga di dalam paketnya.
+APK **CodeX Studio** tidak membundel biner pihak ketiga di dalam paketnya.
 Seluruh komponen diunduh saat instalasi pertama dari sumber resminya.
 Komponen tersebut tunduk pada lisensi masing-masing:
 

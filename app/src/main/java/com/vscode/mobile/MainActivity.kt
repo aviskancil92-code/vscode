@@ -12,10 +12,17 @@ import android.os.Environment
 import android.os.StatFs
 import android.text.method.ScrollingMovementMethod
 import android.util.Log
-import android.view.Menu
+import android.content.res.Configuration
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.text.Spanned
+import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
+import android.view.inputmethod.InputMethodManager
 import android.view.Gravity
 import android.view.KeyEvent
-import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -98,19 +105,30 @@ class MainActivity : AppCompatActivity() {
 
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
-    // Header (ActionBar) disembunyikan saat mode Web; ketuk 3 jari untuk menampilkan.
-    private var headerVisible = false
-    private var lastThreeFingerAt = 0L
     private var hintShown = false
+    private var lastGestureAt = 0L
+    private val gestureHandler = Handler(Looper.getMainLooper())
+    private var pendingMenuRunnable: Runnable? = null
 
     // Popup in-app (login OAuth GitHub/Google, window.open, link eksternal).
     private var popupRoot: LinearLayout? = null
     private var popupWeb: WebView? = null
     private var popupVisitedExternal = false
 
-    // Tombol & pintasan keyboard.
+    // Input: keyboard virtual (4 jari), menu layar penuh (3 jari), tombol volume.
     private lateinit var keyPad: KeyPad
-    private var shortcutPanel: View? = null
+    private var macKeyboard: MacKeyboard? = null
+    private var menuScreen: MenuScreen? = null
+
+    // Layar instalasi.
+    private class StepView(
+        val title: TextView, val subtitle: TextView,
+        val check: View, val spinner: View, val pending: View
+    )
+    private val stepViews = ArrayList<StepView>()
+    private var maxPercent = 0
+    private var installStarted = false
+    private var storageGrantedAtStart = false
 
     private val storagePerms = arrayOf(
         Manifest.permission.READ_EXTERNAL_STORAGE,
@@ -119,16 +137,18 @@ class MainActivity : AppCompatActivity() {
 
     private val requestStorage =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-            if (hasStoragePermission()) {
-                afterStorageGranted()
-            } else {
-                Toast.makeText(this, R.string.storage_denied, Toast.LENGTH_LONG).show()
+            if (!hasStoragePermission()) {
+                Toast.makeText(this, R.string.storage_denied_short, Toast.LENGTH_LONG).show()
+            } else if (!storageGrantedAtStart && LinuxService.state.value is ServerState.Running) {
+                // Grup penyimpanan diwarisi proot saat start -> mulai ulang agar /sdcard terbaca.
+                LinuxService.requestRestart(this)
             }
+            afterStorageResolved()
         }
 
     private val allFilesAccess =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-            if (storageReadable()) afterStorageGranted()
+            afterStorageResolved()
         }
 
     // ------------------------------------------------------------------ onCreate
@@ -138,21 +158,17 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        keyPad = KeyPad(this, { popupWeb ?: webView }, { toggleShortcutPanel() }, { toggleKeyBar() })
-        keyPad.volMode = getSharedPreferences("ui", MODE_PRIVATE).getInt("volmode", 0)
-        keyPad.buildBar(binding.keysRow)
-        binding.keysBar.visibility =
-            if (getSharedPreferences("ui", MODE_PRIVATE).getBoolean("keybar", false)) View.VISIBLE else View.GONE
+        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
+        keyPad = KeyPad({ popupWeb ?: webView }, { setKeyboardOpen(!keyboardVisible()) })
+        keyPad.volumeKeys = prefs.getBoolean("volkeys", true)
 
-        binding.textStorage.text = getString(
-            R.string.storage_free_fmt,
-            fmtSize(StatFs(filesDir.path).availableBytes)
-        )
+        binding.textBrand.text = brandText()
+        binding.textBrandLoading.text = brandText()
+        binding.textVersion.text = "— v${versionName()} —"
+        buildStepViews()
         binding.textInstallError.movementMethod = ScrollingMovementMethod()
 
-        binding.buttonInstall.setOnClickListener { onInstallClicked() }
         binding.buttonRetry.setOnClickListener { onInstallClicked() }
-        binding.buttonCancel.setOnClickListener { installJob?.cancel() }
         binding.buttonLoadingAction.setOnClickListener { onLoadingAction() }
 
         applyKeepScreenOn(StateStore.read(this).keepScreenOn)
@@ -165,20 +181,23 @@ class MainActivity : AppCompatActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                if (shortcutPanel != null) { hideShortcutPanel(); return }
+                if (menuScreen != null) { hideMenu(); return }
                 val pw = popupWeb
                 if (pw != null) {
                     if (pw.canGoBack()) pw.goBack() else closePopup()
                     return
                 }
+                if (keyboardVisible()) { setKeyboardOpen(false); return }
                 val wv = webView
                 if (mode == Mode.Web && wv != null && wv.canGoBack()) wv.goBack()
                 else moveTaskToBack(false)
             }
         })
 
+        storageGrantedAtStart = hasStoragePermission()
         observeServerState()
         initUi()
+        requestStorageAtLaunch()
     }
 
     private fun initUi() {
@@ -187,7 +206,9 @@ class MainActivity : AppCompatActivity() {
             val st = LinuxService.state.value
             if (st is ServerState.Idle || st is ServerState.Stopped) LinuxService.start(this)
         } else {
-            setMode(Mode.Setup)
+            // Belum terpasang: langsung tampilkan layar instalasi (tanpa tombol konfirmasi).
+            resetInstallUi()
+            setMode(Mode.Installing)
         }
     }
 
@@ -197,10 +218,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun render() {
-        binding.setupContainer.visibility =
-            if (mode == Mode.Setup || mode == Mode.SetupFailed) View.VISIBLE else View.GONE
         binding.installContainer.visibility =
-            if (mode == Mode.Installing) View.VISIBLE else View.GONE
+            if (mode == Mode.Setup || mode == Mode.SetupFailed || mode == Mode.Installing) View.VISIBLE else View.GONE
         binding.loadingContainer.visibility =
             if (mode == Mode.Loading) View.VISIBLE else View.GONE
         binding.webArea.visibility =
@@ -212,39 +231,68 @@ class MainActivity : AppCompatActivity() {
         applyChrome()
         if (mode == Mode.Web && !hintShown) {
             hintShown = true
-            Toast.makeText(this, R.string.hint_three_finger, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, R.string.hint_gestures, Toast.LENGTH_LONG).show()
         }
     }
 
-    // ------------------------------------------------------- layar penuh & header
+    // ------------------------------------------------------- layar penuh & tema
 
-    /** Mode Web: tanpa ActionBar & status/nav bar. Mode lain: tampilan normal. */
+    /** Mode Web: layar penuh imersif (tanpa bar). Mode lain: bar sistem normal. */
     private fun applyChrome() {
-        val immersive = mode == Mode.Web && !headerVisible
         val ctrl = WindowCompat.getInsetsController(window, window.decorView)
-        if (immersive) {
-            supportActionBar?.hide()
-            ctrl.systemBarsBehavior =
-                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        val night = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        ctrl.isAppearanceLightStatusBars = !night
+        ctrl.isAppearanceLightNavigationBars = !night
+        if (mode == Mode.Web) {
+            ctrl.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             ctrl.hide(WindowInsetsCompat.Type.systemBars())
         } else {
-            supportActionBar?.show()
-            if (mode == Mode.Web) ctrl.hide(WindowInsetsCompat.Type.systemBars())
-            else ctrl.show(WindowInsetsCompat.Type.systemBars())
+            ctrl.show(WindowInsetsCompat.Type.systemBars())
         }
-    }
-
-    private fun toggleHeader() {
-        val now = System.currentTimeMillis()
-        if (now - lastThreeFingerAt < 700) return // debounce
-        lastThreeFingerAt = now
-        headerVisible = !headerVisible
-        applyChrome()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) applyChrome() // bar sistem bisa muncul lagi setelah dialog/keyboard
+    }
+
+    private fun brandText(): CharSequence {
+        val t = SpannableString("CodeX Studio")
+        t.setSpan(StyleSpan(Typeface.BOLD), 0, 5, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        t.setSpan(
+            ForegroundColorSpan(ContextCompat.getColor(this, R.color.text_secondary)),
+            5, t.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+        )
+        return t
+    }
+
+    private fun versionName(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "1.0"
+
+    // ------------------------------------------------- gestur multi-jari (3 / 4)
+
+    /** 3 jari = menu layar penuh, 4 jari = buka/tutup keyboard. */
+    private fun onMultiTouch(count: Int) {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastGestureAt < 600) return
+        when (count) {
+            3 -> {
+                val r = Runnable {
+                    pendingMenuRunnable = null
+                    lastGestureAt = SystemClock.uptimeMillis()
+                    showMenu()
+                }
+                pendingMenuRunnable = r
+                gestureHandler.postDelayed(r, 220) // beri waktu jari ke-4 (agar tak terbaca 3 jari)
+            }
+            4 -> {
+                pendingMenuRunnable?.let { gestureHandler.removeCallbacks(it) }
+                pendingMenuRunnable = null
+                lastGestureAt = now
+                setKeyboardOpen(!keyboardVisible())
+            }
+        }
     }
 
     // -------------------------------------------------------------- server state
@@ -271,7 +319,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun enterWebIfNeeded() {
         if (mode != Mode.Web) setMode(Mode.Web)
-        ensureStorageAccess(force = false)
         val wv = webView ?: createWebView()
         when {
             !loadedOnce -> {
@@ -355,8 +402,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun beginInstall(rootfs: Uri?, codeServer: Uri?) {
         if (installJob?.isActive == true) return
+        resetInstallUi()
         setMode(Mode.Installing)
-        showInstallProgress(Installer.Progress(getString(R.string.preparing_install)))
+        showInstallProgress(Installer.Progress(getString(R.string.preparing_install), phase = 0))
 
         installJob = lifecycleScope.launch {
             try {
@@ -368,7 +416,7 @@ class MainActivity : AppCompatActivity() {
                     manualCodeServer = codeServer
                 )
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, R.string.install_done, Toast.LENGTH_LONG).show()
+                    finishInstallUi()
                     applyKeepScreenOn(result.keepScreenOn)
                     setMode(Mode.Loading)
                     LinuxService.start(this@MainActivity)
@@ -388,22 +436,108 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showInstallProgress(p: Installer.Progress) {
-        binding.textInstallStep.text = p.step
-        binding.textInstallDetail.text = when {
-            p.total > 0 -> "${fmtSize(p.read)} / ${fmtSize(p.total)}  ${p.detail}".trim()
-            p.read > 0 -> fmtSize(p.read)
-            else -> p.detail
-        }
-        binding.textInstallSpeed.text = if (p.speedBps > 0) "${fmtSize(p.speedBps)}/dtk" else ""
-        if (p.total > 0) {
-            binding.progressInstall.isIndeterminate = false
-            binding.progressInstall.max = 100
-            binding.progressInstall.setProgressCompat(
-                (p.read * 100 / p.total).toInt(), true
+    private fun buildStepViews() {
+        stepViews.clear()
+        binding.stepsList.removeAllViews()
+        val defs = listOf(
+            Pair(R.string.step_proot, R.drawable.ic_step_proot),
+            Pair(R.string.step_debian, R.drawable.ic_step_debian),
+            Pair(R.string.step_server, R.drawable.ic_step_code),
+            Pair(R.string.step_final, R.drawable.ic_step_final)
+        )
+        for ((i, d) in defs.withIndex()) {
+            if (i > 0) {
+                binding.stepsList.addView(View(this).apply {
+                    setBackgroundColor(ContextCompat.getColor(context, R.color.card_stroke))
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply {
+                    marginStart = dp(80)
+                    marginEnd = dp(16)
+                })
+            }
+            val item = layoutInflater.inflate(R.layout.item_step, binding.stepsList, false)
+            item.findViewById<android.widget.ImageView>(R.id.stepIcon).setImageResource(d.second)
+            val title = item.findViewById<TextView>(R.id.stepTitle).also { it.setText(d.first) }
+            stepViews.add(
+                StepView(
+                    title,
+                    item.findViewById(R.id.stepSubtitle),
+                    item.findViewById(R.id.stepCheck),
+                    item.findViewById(R.id.stepSpinner),
+                    item.findViewById(R.id.stepPending)
+                )
             )
-        } else {
-            binding.progressInstall.isIndeterminate = true
+            binding.stepsList.addView(item)
+        }
+        resetInstallUi()
+    }
+
+    private fun setStep(i: Int, state: Int, subtitle: String) { // 0 menunggu, 1 aktif, 2 selesai
+        val v = stepViews.getOrNull(i) ?: return
+        v.subtitle.text = subtitle
+        v.check.visibility = if (state == 2) View.VISIBLE else View.GONE
+        v.spinner.visibility = if (state == 1) View.VISIBLE else View.GONE
+        v.pending.visibility = if (state == 0) View.VISIBLE else View.GONE
+    }
+
+    private fun doneLabel(i: Int): String = when (i) {
+        0 -> "proot ${Pins.PROOT_VERSION}"
+        1 -> "Debian ${Pins.DEBIAN_RELEASE}"
+        2 -> "code-server ${LinuxRuntime.codeServerVersionFor()}"
+        else -> getString(R.string.step_done)
+    }
+
+    private fun resetInstallUi() {
+        maxPercent = 0
+        if (stepViews.isEmpty()) return
+        for (i in stepViews.indices) setStep(i, 0, getString(R.string.step_waiting))
+        binding.progressInstall.isIndeterminate = false
+        binding.progressInstall.progress = 0
+        binding.textPercent.text = "0%"
+        binding.textInstallStatus.setText(R.string.install_waiting)
+    }
+
+    private fun finishInstallUi() {
+        for (i in stepViews.indices) setStep(i, 2, doneLabel(i))
+        binding.progressInstall.setProgressCompat(100, true)
+        binding.textPercent.text = "100%"
+    }
+
+    private fun showInstallProgress(p: Installer.Progress) {
+        val phase = p.phase.coerceIn(0, stepViews.size - 1)
+        val f = if (p.total > 0) (p.read.toDouble() / p.total).coerceIn(0.0, 1.0) else 0.0
+        val sub = when {
+            p.step.startsWith("Mengekstrak") -> 0.5 + 0.5 * f
+            p.total > 0 -> 0.5 * f
+            else -> 0.0
+        }
+        val (lo, hi) = when (phase) {
+            0 -> 0 to 5
+            1 -> 5 to 45
+            2 -> 45 to 95
+            else -> 95 to 100
+        }
+        val pct = maxOf((lo + (hi - lo) * sub).toInt(), maxPercent)
+        maxPercent = pct
+        binding.progressInstall.isIndeterminate = false
+        binding.progressInstall.setProgressCompat(pct, true)
+        binding.textPercent.text = "$pct%"
+        binding.textInstallStatus.text = p.step
+
+        val detail = when {
+            p.total > 0 -> buildString {
+                append("${fmtSize(p.read)} / ${fmtSize(p.total)}")
+                if (p.speedBps > 0) append("  ·  ${fmtSize(p.speedBps)}/dtk")
+            }
+            p.read > 0 -> fmtSize(p.read)
+            p.detail.isNotBlank() -> p.detail
+            else -> p.step
+        }
+        for (i in stepViews.indices) {
+            when {
+                i < phase -> setStep(i, 2, doneLabel(i))
+                i == phase -> setStep(i, 1, detail)
+                else -> setStep(i, 0, getString(R.string.step_waiting))
+            }
         }
     }
 
@@ -418,8 +552,11 @@ class MainActivity : AppCompatActivity() {
         )
         wv.setBackgroundColor(0xFF0F1115.toInt())
         configureWebView(wv)
+        wv.suppressIme = keyboardVisible()
         wv.setOnTouchListener { _, ev ->
-            if (ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN && ev.pointerCount == 3) toggleHeader()
+            if (ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN &&
+                (ev.pointerCount == 3 || ev.pointerCount == 4)
+            ) onMultiTouch(ev.pointerCount)
             false // tetap teruskan sentuhan ke WebView
         }
         binding.webContainer.addView(wv, 0)
@@ -444,6 +581,8 @@ class MainActivity : AppCompatActivity() {
         s.allowFileAccess = false
         s.allowContentAccess = false
         s.textZoom = 100
+        s.useWideViewPort = true
+        s.loadWithOverviewMode = false
         s.setSupportZoom(true)
         s.builtInZoomControls = true
         s.displayZoomControls = false
@@ -456,6 +595,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         wv.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, url: String?) {
+                applyUiScale(view)
+            }
+
             override fun shouldOverrideUrlLoading(
                 view: WebView,
                 request: WebResourceRequest
@@ -565,62 +708,124 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    // ------------------------------------------------------ pintasan keyboard
-
-    private fun toggleShortcutPanel() {
-        if (shortcutPanel != null) { hideShortcutPanel(); return }
-        val panel = keyPad.buildPanel { hideShortcutPanel() }
-        val h = (resources.displayMetrics.heightPixels * 0.45f).toInt()
-        binding.webContainer.addView(
-            panel,
-            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h, Gravity.BOTTOM)
-        )
-        shortcutPanel = panel
-    }
-
-    private fun hideShortcutPanel() {
-        val p = shortcutPanel ?: return
-        shortcutPanel = null
-        runCatching { (p.parent as? ViewGroup)?.removeView(p) }
-    }
-
-    private fun showVolumeKeysDialog() {
-        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
-        val items = arrayOf(
-            getString(R.string.volkeys_opt0), getString(R.string.volkeys_opt1), getString(R.string.volkeys_opt2)
-        )
-        AlertDialog.Builder(this)
-            .setTitle(R.string.volkeys_title)
-            .setSingleChoiceItems(items, prefs.getInt("volmode", 0)) { d, which ->
-                prefs.edit().putInt("volmode", which).apply()
-                keyPad.volMode = which
-                keyPad.refreshMods()
-                d.dismiss()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
+    // ----------------------------------------------- keyboard virtual & menu layar penuh
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val c = event.keyCode
         if ((c == KeyEvent.KEYCODE_VOLUME_DOWN || c == KeyEvent.KEYCODE_VOLUME_UP) &&
-            mode == Mode.Web && ::keyPad.isInitialized &&
+            mode == Mode.Web && ::keyPad.isInitialized && menuScreen == null &&
             keyPad.onVolume(c, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
         ) return true
         return super.dispatchKeyEvent(event)
     }
 
-    private fun toggleKeyBar() {
-        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
-        val on = !prefs.getBoolean("keybar", false)
-        prefs.edit().putBoolean("keybar", on).apply()
-        binding.keysBar.visibility = if (on) View.VISIBLE else View.GONE
+    private fun keyboardVisible() = macKeyboard != null
+
+    private fun setKeyboardOpen(open: Boolean) {
+        if (open == keyboardVisible() || mode != Mode.Web) return
+        val cont = binding.keyboardContainer
+        if (open) {
+            val dm = resources.displayMetrics
+            val kb = MacKeyboard(this, keyPad, dm.widthPixels, (dm.heightPixels * 0.5f).toInt())
+            val h = kb.targetHeight()
+            cont.removeAllViews()
+            cont.addView(kb, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h))
+            cont.visibility = View.VISIBLE
+            macKeyboard = kb
+            kb.translationY = h.toFloat()
+            kb.animate().translationY(0f).setDuration(200).start()
+            (webView as? CodeWebView)?.let { w ->
+                w.suppressIme = true
+                (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                    .hideSoftInputFromWindow(w.windowToken, 0)
+            }
+        } else {
+            val kb = macKeyboard ?: return
+            macKeyboard = null
+            (webView as? CodeWebView)?.suppressIme = false
+            kb.animate().translationY(kb.height.toFloat()).setDuration(160).withEndAction {
+                cont.removeAllViews()
+                cont.visibility = View.GONE
+            }.start()
+        }
     }
 
-    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
-        menu.findItem(R.id.action_keybar)?.isChecked =
-            getSharedPreferences("ui", MODE_PRIVATE).getBoolean("keybar", false)
-        return super.onPrepareOptionsMenu(menu)
+    private fun uiPrefs() = getSharedPreferences("ui", MODE_PRIVATE)
+
+    /**
+     * Ukuran tampilan code-server: skala halaman lewat meta viewport (layout lebar = lebar layar / skala,
+     * zoom awal = skala). Dipanggil setelah halaman selesai dimuat dan tiap slider diubah.
+     */
+    private fun applyUiScale(wv: WebView? = webView) {
+        val v = wv ?: return
+        val pct = uiPrefs().getInt("scale", 100).coerceIn(50, 200)
+        if (v.width <= 0) {
+            v.post { applyUiScale(v) }
+            return
+        }
+        val s = pct / 100f
+        val widthDip = Math.round(v.width / resources.displayMetrics.density / s)
+        val js = "(function(w,s){var m=document.querySelector('meta[name=viewport]');" +
+            "if(!m){m=document.createElement('meta');m.name='viewport';document.head.appendChild(m);}" +
+            "m.setAttribute('content','width='+w+',initial-scale='+s+',minimum-scale='+s+" +
+            "',maximum-scale='+s+',user-scalable=no');})($widthDip,${String.format(Locale.US, "%.3f", s)})"
+        v.evaluateJavascript(js, null)
+    }
+
+    private val menuHost = object : MenuHost {
+        override fun restartServer() {
+            LinuxService.requestRestart(this@MainActivity)
+            Toast.makeText(this@MainActivity, R.string.restarting_server, Toast.LENGTH_SHORT).show()
+        }
+
+        override fun stopServer() { LinuxService.requestStop(this@MainActivity) }
+
+        override var keyboardOpen: Boolean
+            get() = keyboardVisible()
+            set(v) { setKeyboardOpen(v) }
+
+        override var volumeKeysOn: Boolean
+            get() = keyPad.volumeKeys
+            set(v) {
+                keyPad.volumeKeys = v
+                uiPrefs().edit().putBoolean("volkeys", v).apply()
+            }
+
+        override var uiScalePercent: Int
+            get() = uiPrefs().getInt("scale", 100)
+            set(v) {
+                uiPrefs().edit().putInt("scale", v).apply()
+                applyUiScale()
+            }
+
+        override var keepScreenOn: Boolean
+            get() = StateStore.read(this@MainActivity).keepScreenOn
+            set(v) {
+                StateStore.write(this@MainActivity, StateStore.read(this@MainActivity).copy(keepScreenOn = v))
+                applyKeepScreenOn(v)
+            }
+
+        override fun openSettings() { showSettings() }
+        override fun openLogs() { showLogs() }
+        override fun openAbout() { showAbout() }
+    }
+
+    private fun showMenu() {
+        if (menuScreen != null || mode != Mode.Web) return
+        val m = MenuScreen(this, menuHost) { hideMenu() }
+        binding.root.addView(m.view, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        menuScreen = m
+        (webView as? CodeWebView)?.let {
+            (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
+                .hideSoftInputFromWindow(it.windowToken, 0)
+        }
+    }
+
+    private fun hideMenu() {
+        val m = menuScreen ?: return
+        menuScreen = null
+        runCatching { binding.root.removeView(m.view) }
     }
 
     // -------------------------------------------------------- popup / login OAuth
@@ -772,44 +977,41 @@ class MainActivity : AppCompatActivity() {
         File("/sdcard/Download").list() != null
     }.getOrDefault(false)
 
-    private fun afterStorageGranted() {
-        Toast.makeText(this, R.string.storage_granted, Toast.LENGTH_LONG).show()
-        // Proses proot mewarisi grup penyimpanan saat dijalankan -> mulai ulang server.
-        LinuxService.requestRestart(this)
+    /** Saat aplikasi dibuka: langsung minta izin penyimpanan (tanpa dialog penjelasan). */
+    private fun requestStorageAtLaunch() {
+        if (hasStoragePermission()) afterStorageResolved() else requestStorage.launch(storagePerms)
     }
 
-    private fun ensureStorageAccess(force: Boolean) {
-        if (storageReadable() && hasStoragePermission()) {
-            if (force) Toast.makeText(this, R.string.storage_already, Toast.LENGTH_SHORT).show()
-            return
-        }
-        val prefs = getSharedPreferences("ui", MODE_PRIVATE)
-        if (!force && prefs.getBoolean("storage_asked", false)) return
-        prefs.edit().putBoolean("storage_asked", true).apply()
-        AlertDialog.Builder(this)
-            .setTitle(R.string.storage_title)
-            .setMessage(R.string.storage_rationale)
-            .setPositiveButton(R.string.storage_allow) { _, _ -> requestStorageNow() }
-            .setNegativeButton(R.string.cancel, null)
-            .show()
-    }
-
-    private fun requestStorageNow() {
-        if (!hasStoragePermission()) {
-            requestStorage.launch(storagePerms)
-            return
-        }
-        // Izin sudah ada tetapi /sdcard masih tertutup (Android 11+): butuh "Akses semua berkas".
-        if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
-            val i = Intent(
-                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                Uri.parse("package:$packageName")
-            )
-            runCatching { allFilesAccess.launch(i) }.onFailure {
-                runCatching {
-                    allFilesAccess.launch(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+    private fun afterStorageResolved() {
+        // Android 11+: bila /sdcard masih tertutup, tawarkan "Akses semua berkas" (sekali saja).
+        if (hasStoragePermission() && Build.VERSION.SDK_INT >= 30 &&
+            !storageReadable() && !Environment.isExternalStorageManager() &&
+            !uiPrefs().getBoolean("allfiles_asked", false)
+        ) {
+            uiPrefs().edit().putBoolean("allfiles_asked", true).apply()
+            AlertDialog.Builder(this)
+                .setTitle(R.string.storage_all_files_title)
+                .setMessage(R.string.storage_all_files_msg)
+                .setPositiveButton(R.string.open_settings) { _, _ ->
+                    val i = Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    runCatching { allFilesAccess.launch(i) }.onFailure { continueAfterStorage() }
                 }
-            }
+                .setNegativeButton(android.R.string.cancel) { _, _ -> continueAfterStorage() }
+                .setOnCancelListener { continueAfterStorage() }
+                .show()
+            return
+        }
+        continueAfterStorage()
+    }
+
+    /** Instalasi berjalan otomatis setelah urusan izin selesai. */
+    private fun continueAfterStorage() {
+        if (!LinuxRuntime.isInstalled(this) && !installStarted && installJob?.isActive != true) {
+            installStarted = true
+            onInstallClicked()
         }
     }
 
@@ -820,56 +1022,6 @@ class MainActivity : AppCompatActivity() {
         )
         return if (publicDir.canWrite()) publicDir
         else File(getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir, "unduhan")
-    }
-
-    // --------------------------------------------------------------------- menu
-
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_restart -> {
-                LinuxService.requestRestart(this)
-                Toast.makeText(this, R.string.restarting_server, Toast.LENGTH_SHORT).show()
-                true
-            }
-            R.id.action_stop -> {
-                LinuxService.requestStop(this)
-                true
-            }
-            R.id.action_shortcuts -> {
-                toggleShortcutPanel()
-                true
-            }
-            R.id.action_volkeys -> {
-                showVolumeKeysDialog()
-                true
-            }
-            R.id.action_keybar -> {
-                toggleKeyBar()
-                true
-            }
-            R.id.action_storage -> {
-                ensureStorageAccess(force = true)
-                true
-            }
-            R.id.action_settings -> {
-                showSettings()
-                true
-            }
-            R.id.action_logs -> {
-                showLogs()
-                true
-            }
-            R.id.action_about -> {
-                showAbout()
-                true
-            }
-            else -> super.onOptionsItemSelected(item)
-        }
     }
 
     // ------------------------------------------------------------------ dialogs

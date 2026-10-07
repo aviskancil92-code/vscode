@@ -265,7 +265,7 @@ class LinuxService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_terminal)
-            .setContentTitle("VS Code Mobile")
+            .setContentTitle("CodeX Studio")
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)

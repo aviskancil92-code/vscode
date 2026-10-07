@@ -26,8 +26,8 @@ android {
         // Dengan targetSdk 28, menjalankan userland Linux tanpa root tetap legal.
         // Jangan naikkan ke 29+ kecuali Anda tahu konsekuensinya.
         targetSdk = 28
-        versionCode = 7
-        versionName = "1.0.6"
+        versionCode = 8
+        versionName = "1.1.0"
     }
 
     signingConfigs {

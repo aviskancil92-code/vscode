@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">VS Code Mobile</string>
+    <string name="app_name">CodeX Studio</string>
     <string name="tagline">Debian + code-server di Android — tanpa root</string>
 
     <!-- Setup -->
@@ -60,7 +60,7 @@
     <string name="downloading_fmt">Mengunduh %1$s…</string>
     <string name="saved_fmt">Tersimpan: %1$s</string>
     <string name="download_failed_fmt">Unduhan gagal: %1$s</string>
-    <string name="about_msg_fmt">VS Code Mobile — pembungkus Android untuk code-server.\n\n• code-server %1$s (coder/code-server, MIT)\n• Debian %2$s rootfs (linuxcontainers.org)\n• proot %3$s (Termux)\n\nMenjalankan VS Code lengkap — termasuk terminal Debian, ekstensi, dan Git — tanpa root.</string>
+    <string name="about_msg_fmt">CodeX Studio — pembungkus Android untuk code-server.\n\n• code-server %1$s (coder/code-server, MIT)\n• Debian %2$s rootfs (linuxcontainers.org)\n• proot %3$s (Termux)\n\nMenjalankan VS Code lengkap — termasuk terminal Debian, ekstensi, dan Git — tanpa root.</string>
     <string name="menu_storage">Izin penyimpanan</string>
     <string name="hint_three_finger">Layar penuh aktif. Ketuk 3 jari untuk menampilkan/menyembunyikan header.</string>
     <string name="popup_close">Tutup</string>
@@ -80,4 +80,31 @@
     <string name="volkeys_opt1">Vol-Bawah = Ctrl, Vol-Atas = Shift</string>
     <string name="volkeys_opt2">Mati (volume seperti biasa)</string>
     <string name="volume_help">Tombol volume (menu ⋮ → Tombol volume): tahan Vol-Bawah lalu ketik huruf = Ctrl+huruf (atau ketuk sekali, lalu ketik). Mode Termux: tahan/ketuk Vol-Atas lalu W A S D = panah, E = Esc, T = Tab, P/N = PgUp/PgDn, I/O = Home/End, X = Delete, H = ~, U = _, L = |, 1–9/0 = F1–F10, . = Ctrl+\\, Q = bar tombol. Shift &amp; Alt: ketuk tombolnya di bar (ketuk lama = kunci).</string>
+    <string name="install_title">Menyiapkan lingkungan</string>
+    <string name="install_waiting">Memulai…</string>
+    <string name="install_footer">Menyiapkan ruang kerja seluler Anda</string>
+    <string name="step_proot">Proot &amp; pustaka</string>
+    <string name="step_debian">Sistem Debian</string>
+    <string name="step_server">code-server + Node.js</string>
+    <string name="step_final">Konfigurasi akhir</string>
+    <string name="step_waiting">Menunggu…</string>
+    <string name="step_done">Selesai</string>
+    <string name="hint_gestures">Ketuk 3 jari: menu · Ketuk 4 jari: keyboard</string>
+    <string name="menu_title">Menu</string>
+    <string name="menu_back">Kembali</string>
+    <string name="menu_section_server">SERVER</string>
+    <string name="menu_section_input">INPUT</string>
+    <string name="menu_section_display">TAMPILAN</string>
+    <string name="menu_section_more">LAINNYA</string>
+    <string name="menu_keyboard">Keyboard virtual</string>
+    <string name="menu_keyboard_sub">Atau ketuk 4 jari</string>
+    <string name="menu_volume">Tombol volume</string>
+    <string name="menu_volume_sub">Vol-Bawah = Ctrl · Vol-Atas = Fn</string>
+    <string name="menu_scale">Ukuran tampilan</string>
+    <string name="menu_scale_reset">Atur ulang</string>
+    <string name="menu_keep_on">Layar selalu aktif</string>
+    <string name="storage_denied_short">Izin penyimpanan ditolak — /sdcard tidak dapat dibuka.</string>
+    <string name="storage_all_files_title">Akses semua berkas</string>
+    <string name="storage_all_files_msg">Aktifkan \"Akses semua berkas\" agar CodeX Studio bisa membuka /sdcard (mis. berkas .vsix di Download).</string>
+    <string name="open_settings">Buka pengaturan</string>
 </resources>

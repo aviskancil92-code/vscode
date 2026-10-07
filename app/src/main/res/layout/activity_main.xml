@@ -3,199 +3,145 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/bg_screen">
 
-    <!-- ============ LAYAR SETUP (belum terpasang) ============ -->
+    <!-- ============ LAYAR INSTALASI (otomatis, tanpa konfirmasi) ============ -->
     <androidx.core.widget.NestedScrollView
-        android:id="@+id/setupContainer"
+        android:id="@+id/installContainer"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:fillViewport="true">
+        android:fillViewport="true"
+        android:visibility="gone">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="center_horizontal"
             android:orientation="vertical"
-            android:padding="24dp">
+            android:paddingStart="24dp"
+            android:paddingTop="40dp"
+            android:paddingEnd="24dp"
+            android:paddingBottom="24dp">
 
             <ImageView
-                android:layout_width="96dp"
-                android:layout_height="96dp"
-                android:layout_marginTop="24dp"
-                android:background="@drawable/bg_logo"
+                android:layout_width="124dp"
+                android:layout_height="124dp"
+                android:background="@drawable/bg_logo_tile"
                 android:contentDescription="@string/app_name"
-                android:padding="16dp"
-                android:src="@drawable/ic_launcher_fg" />
+                android:elevation="8dp"
+                android:padding="26dp"
+                android:src="@drawable/logo_cx" />
 
             <TextView
+                android:id="@+id/textBrand"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:text="@string/app_name"
-                android:textAppearance="?attr/textAppearanceHeadlineMedium"
-                android:textStyle="bold" />
+                android:layout_marginTop="28dp"
+                android:textColor="@color/text_primary"
+                android:textSize="34sp"
+                tools:text="CodeX Studio" />
 
             <TextView
-                android:layout_width="wrap_content"
+                android:id="@+id/textInstallTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:text="@string/install_title"
+                android:textColor="@color/text_primary"
+                android:textSize="22sp" />
+
+            <TextView
+                android:id="@+id/textInstallStatus"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="@string/tagline"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="?attr/colorOnSurfaceVariant" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
                 android:gravity="center"
-                android:lineSpacingExtra="4dp"
-                android:text="@string/setup_description"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="?attr/colorOnSurfaceVariant" />
+                android:text="@string/install_waiting"
+                android:textColor="@color/text_secondary"
+                android:textSize="15sp" />
 
-            <com.google.android.material.card.MaterialCardView
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                app:cardCornerRadius="16dp"
-                app:strokeWidth="0dp">
+                android:layout_marginStart="8dp"
+                android:layout_marginTop="20dp"
+                android:layout_marginEnd="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
+                <com.google.android.material.progressindicator.LinearProgressIndicator
+                    android:id="@+id/progressInstall"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
+                    android:layout_weight="1"
+                    android:max="100"
+                    app:indicatorColor="@color/accent_blue"
+                    app:trackColor="@color/track"
+                    app:trackCornerRadius="6dp"
+                    app:trackThickness="10dp" />
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="@string/download_plan_title"
-                        android:textAppearance="?attr/textAppearanceTitleMedium" />
+                <TextView
+                    android:id="@+id/textPercent"
+                    android:layout_width="52dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:text="0%"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="15sp" />
+            </LinearLayout>
 
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:fontFamily="monospace"
-                        android:lineSpacingExtra="2dp"
-                        android:text="@string/download_plan"
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorOnSurfaceVariant" />
-
-                    <TextView
-                        android:id="@+id/textStorage"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:fontFamily="monospace"
-                        android:textAppearance="?attr/textAppearanceBodySmall"
-                        android:textColor="?attr/colorPrimary"
-                        tools:text="Ruang bebas: 12,3 GB" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-
-            <Button
-                android:id="@+id/buttonInstall"
+            <LinearLayout
+                android:id="@+id/stepsList"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:minHeight="56dp"
-                android:text="@string/install_now"
-                android:textSize="16sp" />
+                android:layout_marginTop="28dp"
+                android:background="@drawable/bg_card"
+                android:orientation="vertical"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp" />
 
             <TextView
                 android:id="@+id/textInstallError"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
+                android:layout_marginTop="16dp"
                 android:fontFamily="monospace"
-                android:textAppearance="?attr/textAppearanceBodySmall"
-                android:textColor="?attr/colorError"
+                android:textColor="@color/accent_red"
+                android:textSize="12sp"
                 android:visibility="gone" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/buttonRetry"
-                style="?attr/borderlessButtonStyle"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
+                android:layout_width="match_parent"
+                android:layout_height="56dp"
+                android:layout_marginTop="16dp"
                 android:text="@string/retry"
-                android:visibility="gone" />
+                android:textSize="16sp"
+                android:visibility="gone"
+                app:cornerRadius="16dp" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="20dp"
-                android:layout_marginBottom="24dp"
+                android:layout_marginTop="24dp"
                 android:gravity="center"
-                android:text="@string/setup_manual_hint"
-                android:textAppearance="?attr/textAppearanceBodySmall"
-                android:textColor="?attr/colorOnSurfaceVariant" />
+                android:text="@string/install_footer"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/textVersion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="v1.0"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
         </LinearLayout>
     </androidx.core.widget.NestedScrollView>
-
-    <!-- ============ LAYAR PROGRES INSTALASI ============ -->
-    <LinearLayout
-        android:id="@+id/installContainer"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:gravity="center"
-        android:orientation="vertical"
-        android:padding="32dp"
-        android:visibility="gone">
-
-        <ImageView
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:background="@drawable/bg_logo"
-            android:contentDescription="@string/app_name"
-            android:padding="12dp"
-            android:src="@drawable/ic_launcher_fg" />
-
-        <TextView
-            android:id="@+id/textInstallStep"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:gravity="center"
-            android:textAppearance="?attr/textAppearanceTitleMedium" />
-
-        <com.google.android.material.progressindicator.LinearProgressIndicator
-            android:id="@+id/progressInstall"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            app:trackCornerRadius="6dp" />
-
-        <TextView
-            android:id="@+id/textInstallDetail"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:fontFamily="monospace"
-            android:gravity="center"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?attr/colorOnSurfaceVariant" />
-
-        <TextView
-            android:id="@+id/textInstallSpeed"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:fontFamily="monospace"
-            android:gravity="center"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?attr/colorPrimary" />
-
-        <Button
-            android:id="@+id/buttonCancel"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="28dp"
-            android:text="@string/cancel" />
-    </LinearLayout>
 
     <!-- ============ LAYAR LOADING SERVER ============ -->
     <LinearLayout
@@ -208,18 +154,30 @@
         android:visibility="gone">
 
         <ImageView
-            android:layout_width="72dp"
-            android:layout_height="72dp"
-            android:background="@drawable/bg_logo"
+            android:layout_width="112dp"
+            android:layout_height="112dp"
+            android:background="@drawable/bg_logo_tile"
             android:contentDescription="@string/app_name"
-            android:padding="12dp"
-            android:src="@drawable/ic_launcher_fg" />
+            android:elevation="8dp"
+            android:padding="22dp"
+            android:src="@drawable/logo_cx" />
+
+        <TextView
+            android:id="@+id/textBrandLoading"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:textColor="@color/text_primary"
+            android:textSize="30sp"
+            tools:text="CodeX Studio" />
 
         <com.google.android.material.progressindicator.CircularProgressIndicator
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="28dp"
-            android:indeterminate="true" />
+            android:indeterminate="true"
+            app:indicatorColor="@color/accent_blue"
+            app:trackColor="@color/track" />
 
         <TextView
             android:id="@+id/textLoadingStatus"
@@ -227,7 +185,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:gravity="center"
-            android:textAppearance="?attr/textAppearanceBodyLarge" />
+            android:textColor="@color/text_primary"
+            android:textSize="16sp" />
 
         <TextView
             android:layout_width="match_parent"
@@ -235,19 +194,19 @@
             android:layout_marginTop="8dp"
             android:gravity="center"
             android:text="@string/loading_hint"
-            android:textAppearance="?attr/textAppearanceBodySmall"
-            android:textColor="?attr/colorOnSurfaceVariant" />
+            android:textColor="@color/text_secondary"
+            android:textSize="13sp" />
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@+id/buttonLoadingAction"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
+            android:layout_height="52dp"
             android:layout_marginTop="20dp"
-            android:minHeight="48dp"
-            android:visibility="gone" />
+            android:visibility="gone"
+            app:cornerRadius="16dp" />
     </LinearLayout>
 
-    <!-- ============ WEBVIEW VS CODE + BAR TOMBOL ============ -->
+    <!-- ============ VS CODE (WebView) + KEYBOARD VIRTUAL ============ -->
     <LinearLayout
         android:id="@+id/webArea"
         android:layout_width="match_parent"
@@ -261,22 +220,10 @@
             android:layout_height="0dp"
             android:layout_weight="1" />
 
-        <HorizontalScrollView
-            android:id="@+id/keysBar"
+        <FrameLayout
+            android:id="@+id/keyboardContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#FF1B1E26"
-            android:scrollbars="none"
-            android:visibility="gone">
-
-            <LinearLayout
-                android:id="@+id/keysRow"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:paddingStart="4dp"
-                android:paddingEnd="4dp" />
-        </HorizontalScrollView>
+            android:visibility="gone" />
     </LinearLayout>
-
 </FrameLayout>

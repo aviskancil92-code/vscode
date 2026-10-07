@@ -15,6 +15,11 @@ import android.webkit.WebView
 class CodeWebView(context: Context) : WebView(context) {
     var keyPad: KeyPad? = null
 
+    /** true = keyboard virtual aktif: jangan munculkan keyboard sistem. */
+    var suppressIme = false
+
+    override fun onCheckIsTextEditor(): Boolean = !suppressIme && super.onCheckIsTextEditor()
+
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
         val base = super.onCreateInputConnection(outAttrs) ?: return null
         // Matikan saran/koreksi otomatis di kolom teks biasa agar huruf dikirim satu per satu
